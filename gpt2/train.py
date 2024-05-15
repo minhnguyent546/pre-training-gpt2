@@ -103,7 +103,7 @@ def train_model(config: dict):
         model.load_state_dict(saved_states['model_state_dict'])
         optimizer.load_state_dict(saved_states['optimizer_state_dict'])
         lr_scheduler.load_state_dict(saved_states['lr_scheduler_state_dict'])
-        gpt_config = GPTConfig(saved_states['gpt_config'])
+        gpt_config = GPTConfig(**saved_states['gpt_config'])
         accum_train_loss = saved_states['accum_train_loss']
 
     # training loop
@@ -164,7 +164,7 @@ def train_model(config: dict):
                 'gpt_config': vars(gpt_config),
                 'accum_train_loss': accum_train_loss,
             }
-            model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step}.pt')
+            model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
             torch.save(checkpoint_dict, model_save_path)
 
 def main():
