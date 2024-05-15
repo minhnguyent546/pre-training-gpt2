@@ -155,7 +155,7 @@ def train_model(config: dict):
             writer.flush()
             accum_train_loss = 0.0
 
-        if (global_step + 1) % save_interval:
+        if (global_step + 1) % save_interval == 0:
             checkpoint_dict = {
                 'global_step': global_step + 1,
                 'model_state_dict': model.state_dict(),
