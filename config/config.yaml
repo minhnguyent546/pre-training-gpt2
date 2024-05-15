@@ -1,0 +1,32 @@
+# general options
+checkpoints_dir: checkpoints
+tokenizer_basename: tokenizer.json
+expr_name: runs/gpt2
+seed: 1061109567
+
+# dataset
+data_file_path: ./datasets/vietnamese-books-10-MB.txt
+data_save_path: ./datasets
+test_size: 0.1
+
+# model
+vocab_size: 24_000
+seq_length: 128
+d_model: 384
+num_layers: 6
+num_heads: 6
+d_ff: 1536
+dropout: 0.1
+activation: gelu
+
+# training
+train_steps: 40_000
+valid_steps: 200
+valid_interval: 3_000
+save_interval: 4_000
+lr: 0.5
+warmup_steps: 4_000
+batch_size: 32
+fp16: false
+max_grad_norm: 1.0
+preload_checkpoint: null
