@@ -30,6 +30,8 @@ def eval_model(model: GPT, test_ids, valid_steps: int, criterion, config: dict) 
     valid_iter = tqdm(range(valid_steps), desc='Validating model')
     for _ in valid_iter:
         inputs, labels = get_batch(test_ids, config['batch_size'], config['seq_length'])
+        inputs = inputs.to(model.device)
+        labels = labels.to(model.device)
         logits = model(inputs)
         loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
         accum_valid_loss += loss.item()
@@ -119,6 +121,8 @@ def train_model(config: dict):
 
         with autocast_context:
             inputs, labels = get_batch(train_ids, config['batch_size'], config['seq_length'])
+            inputs = inputs.to(device)
+            labels = labels.to(device)
             logits = model(inputs)
             loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
 
