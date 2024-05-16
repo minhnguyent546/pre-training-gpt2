@@ -6,8 +6,6 @@ import argparse
 import os
 import numpy as np
 
-from torch.utils.tensorboard import SummaryWriter
-
 import tokenizers
 from tokenizers import Tokenizer, AddedToken
 import tokenizers.models

@@ -5,7 +5,6 @@ references:
   nanoGPT implementation: https://github.com/karpathy/nanoGPT
 """
 
-
 import math
 from typing import Optional, Union
 from dataclasses import dataclass
@@ -232,7 +231,7 @@ class GPT(nn.Module):
 
             # next predicted token
             # take this
-            # next_token = torch.argmax(probs, dim=-1)
+            # next_token = torch.argmax(probs, dim=-1, keepdim=True)  # (batch_size, 1)
             # or this
             next_token = torch.multinomial(probs, num_samples=1)  # (batch_size, 1)
             ids = torch.cat((ids, next_token), dim=-1)
