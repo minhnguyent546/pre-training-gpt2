@@ -57,6 +57,7 @@ def train_model(config: dict):
 
     # load trained tokenizer
     tokenizer = Tokenizer.from_file(os.path.join(checkpoints_dir, config['tokenizer_basename']))
+    config['vocab_size'] = tokenizer.get_vocab_size()
 
     # tensorboard
     writer = SummaryWriter(config['expr_name'])
