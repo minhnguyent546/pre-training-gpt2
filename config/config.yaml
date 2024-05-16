@@ -5,7 +5,7 @@ expr_name: runs/gpt2
 seed: 1061109567
 
 # dataset
-data_file_path: ./datasets/vietnamese-books-10-MB.txt
+data_file_path: ./datasets/example-data.txt
 data_save_path: ./datasets
 test_size: 0.1
 
