@@ -10,7 +10,7 @@ data_save_path: ./datasets
 test_size: 0.1
 
 # model
-vocab_size: 24_000
+vocab_size: 32_000
 seq_length: 128
 d_model: 384
 num_layers: 6
@@ -21,7 +21,7 @@ activation: gelu
 
 # training
 train_steps: 40_000
-valid_steps: 200
+valid_steps: 1_000
 valid_interval: 3_000
 save_interval: 4_000
 lr: 0.5
