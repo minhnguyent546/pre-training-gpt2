@@ -88,7 +88,7 @@ def train_model(config: dict):
 
     criterion = nn.CrossEntropyLoss()
     learning_rate = config['lr']
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = utils.make_optimizer(model, config['optim'], lr=learning_rate, weight_decay=config['weight_decay'])
     lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
         lr_lambda=lambda step: learning_rate * utils.noam_decay(step, config['d_model'], config['warmup_steps']),
