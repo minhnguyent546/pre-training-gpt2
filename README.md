@@ -1,6 +1,6 @@
 # GPT-2 from scratch
 
-This is a very simple implementation of GPT-2 model using PyTorch. Some of the idea and code come from OpenAI's GPT-2 implementation and nanoGPT.
+This is a very simple implementation of the GPT-2 model using PyTorch. Some of the ideas and codes are derived from OpenAI's GPT-2 implementation and nanoGPT.
 
 ## Getting started
 
@@ -67,5 +67,4 @@ results:
 ```
 >> Đầu năm 2021
 Đầu năm 2021 , một nhóm hội nghị quốc tế đã được thành lập tại Paris năm 1973 , và cuộc họp này đã được tổ chức bởi các đảng hợp nhất . Năm 1999 , Hội nghị thượng đỉnh thứ nhất được
-
 ```
