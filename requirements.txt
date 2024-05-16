@@ -1,0 +1,5 @@
+numpy==1.26.4
+PyYAML==6.0.1
+tokenizers==0.19.1
+torch==2.2.2
+tqdm==4.66.2
