@@ -46,12 +46,11 @@ python gpt2/generate.py \
     --temperature 1
 
 ```
-results:
+result:
 ```
 >> Nghiên cứu là một quá
 Nghiên cứu là một quá trình tạo ra các chất hút điện ngoài sự vật chất . Có hai lĩnh vực điện xuất nhằm tạo ra các loại nguyên tử tự nhiên thù của các kim loại - kim loại . Gốc vụ có thể có các loại kim loại như hiđrua liti , Gd và các loại sulfua kim loại khác . Các chất phóng xạ khác gồm các đồng ( 90 %), 1 %, ") [ 25 ] 6H2O ( 20 % tương đương với 66 %.
 Các hợp chất ở dạng O2 là hyđrô sulfit ở nhiệt độ thấp , là một trong các điều kiện quan trọng cho sự cháy cháy . Các chất này là nguồn
-
 ```
 
 ```bash
@@ -63,7 +62,7 @@ python gpt2/generate.py \
     --temperature 0.5
 
 ```
-results:
+result:
 ```
 >> Đầu năm 2021
 Đầu năm 2021 , một nhóm hội nghị quốc tế đã được thành lập tại Paris năm 1973 , và cuộc họp này đã được tổ chức bởi các đảng hợp nhất . Năm 1999 , Hội nghị thượng đỉnh thứ nhất được
