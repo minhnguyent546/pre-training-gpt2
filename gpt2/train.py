@@ -38,8 +38,7 @@ def eval_model(model: GPT, test_ids, valid_steps: int, criterion, config: dict) 
 
     accum_valid_loss /= valid_steps
 
-    if is_training:
-        model.train()
+    model.train(is_training)
 
     return {
         'loss': accum_valid_loss,
@@ -62,21 +61,67 @@ def train_model(config: dict):
     # tensorboard
     writer = SummaryWriter(config['expr_name'])
 
-    # model
+    # training device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
-    gpt_config = GPTConfig(
-        vocab_size=config['vocab_size'],
-        seq_length=config['seq_length'],
-        d_model=config['d_model'],
-        num_layers=config['num_layers'],
-        num_heads=config['num_heads'],
-        d_ff=config['d_ff'],
-        dropout=config['dropout'],
-        activation=config['activation'],
-    )
+
+    # resume from previous checkpoint
+    preload_checkpoint = config['preload_checkpoint']
+    saved_states = None
+    if preload_checkpoint is None:
+        gpt_config = GPTConfig(
+            vocab_size=config['vocab_size'],
+            seq_length=config['seq_length'],
+            d_model=config['d_model'],
+            num_layers=config['num_layers'],
+            num_heads=config['num_heads'],
+            d_ff=config['d_ff'],
+            dropout=config['dropout'],
+            activation=config['activation'],
+        )
+    else:
+        print(f'Loading states from checkpoint {preload_checkpoint}')
+        saved_states = torch.load(preload_checkpoint, map_location=device)
+        required_keys = [
+            'model_state_dict',
+            'optimizer_state_dict',
+            'lr_scheduler_state_dict',
+            'config'
+        ]
+        for key in required_keys:
+            if key not in saved_states:
+                raise ValueError(f'Missing key "{key}" in checkpoint')
+        gpt_config = GPTConfig(**saved_states['config'])
+
     model = GPT(gpt_config)
     model.to(device)
+    criterion = nn.CrossEntropyLoss()
+    learning_rate = config['lr']
+    optimizer = utils.make_optimizer(
+        model,
+        config['optim'],
+        lr=learning_rate,
+        weight_decay=config['weight_decay']
+    )
+    lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=lambda step: learning_rate * utils.noam_decay(
+            step,
+            config['d_model'],
+            config['warmup_steps']
+        ),
+    )
+
+    initial_step = 0
+    accum_train_loss = 0.0
+    if saved_states is not None:
+        model.load_state_dict(saved_states['model_state_dict'])
+        optimizer.load_state_dict(saved_states['optimizer_state_dict'])
+        lr_scheduler.load_state_dict(saved_states['lr_scheduler_state_dict'])
+        if 'global_step' in saved_states:
+            initial_step = saved_states['global_step']
+        if 'accum_train_loss' in saved_states:
+            accum_train_loss = saved_states['accum_train_loss']
 
     # mixed precision training with fp16
     dtype = torch.float32
@@ -85,27 +130,6 @@ def train_model(config: dict):
         dtype = torch.float16
         autocast_context = torch.cuda.amp.autocast(dtype=dtype)
     scaler = torch.cuda.amp.GradScaler(enabled=(dtype == torch.float16))
-
-    criterion = nn.CrossEntropyLoss()
-    learning_rate = config['lr']
-    optimizer = utils.make_optimizer(model, config['optim'], lr=learning_rate, weight_decay=config['weight_decay'])
-    lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=lambda step: learning_rate * utils.noam_decay(step, config['d_model'], config['warmup_steps']),
-    )
-
-    # resume from previous checkpoint
-    initial_step = 0
-    accum_train_loss = 0.0
-    preload_checkpoint = config['preload_checkpoint']
-    if preload_checkpoint is not None:
-        saved_states = torch.load(preload_checkpoint, map_location=device)
-        initial_step = saved_states['global_step']
-        model.load_state_dict(saved_states['model_state_dict'])
-        optimizer.load_state_dict(saved_states['optimizer_state_dict'])
-        lr_scheduler.load_state_dict(saved_states['lr_scheduler_state_dict'])
-        gpt_config = GPTConfig(**saved_states['gpt_config'])
-        accum_train_loss = saved_states['accum_train_loss']
 
     # training loop
     train_steps = config['train_steps']
