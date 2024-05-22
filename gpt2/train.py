@@ -138,6 +138,9 @@ def train_model(config: dict):
     save_interval = config['save_interval']
     model.train()
 
+    num_parameters = sum(param.numel() for param in model.parameters() if param.requires_grad)
+    print(f'Model has {num_parameters / 10 ** 6:0.2f}M parameters')
+
     train_iter = tqdm(range(initial_step, train_steps), desc='Training model')
     for global_step in train_iter:
         torch.cuda.empty_cache()

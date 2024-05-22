@@ -170,9 +170,6 @@ class GPT(nn.Module):
         self.device = get_device(device)
         self._use_tied_weights = config.tie_weights
 
-        num_parameters = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        print(f'Model has {num_parameters / 10 ** 6:0.2f}M parameters')
-
         self.post_init()
 
     def forward(self, ids: Tensor) -> Tensor:
