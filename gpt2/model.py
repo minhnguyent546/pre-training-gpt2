@@ -68,7 +68,6 @@ class LayerNorm(nn.Module):
         output = self.gamma * y + self.beta
         return output
 
-
 class CausalMultiHeadSelfAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, dropout: float, max_seq_length: int):
         super().__init__()
@@ -132,6 +131,7 @@ class GPTConfig:
     dropout: float = 0.1
     eps: float = 1e-7
     activation: str = 'gelu'
+    tie_weights: bool = True
 
 class GPTDecoderBlock(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -168,11 +168,12 @@ class GPT(nn.Module):
         self.layer_norm = LayerNorm(self.config.d_model, eps=self.config.eps)  # additional layer normalization
         self.last_linear = nn.Linear(self.config.d_model, self.config.vocab_size)
         self.device = get_device(device)
+        self._use_tied_weights = config.tie_weights
 
         num_parameters = sum(p.numel() for p in self.parameters() if p.requires_grad)
         print(f'Model has {num_parameters / 10 ** 6:0.2f}M parameters')
 
-        self._init_model_weights()
+        self.post_init()
 
     def forward(self, ids: Tensor) -> Tensor:
         batch_size, seq_length = ids.size()
@@ -184,6 +185,20 @@ class GPT(nn.Module):
         x = self.layer_norm(x)
         logits = self.last_linear(x)  # (batch_size, seq_length, vocab_size)
         return logits
+
+    def post_init(self) -> None:
+        self._init_model_weights()
+        if self._use_tied_weights:
+            self._tie_weights()
+
+    def _tie_weights(self) -> None:
+        if self.last_linear.weight.shape != self.token_embedding.weight.shape:
+            raise ValueError(
+                'When using tied weights, the weight of the last linear layer '
+                'and the token embedding layer must be the same shape, '
+                f'but found {self.last_linear.weight.shape} and {self.token_embedding.weight.shape}'
+            )
+        self.last_linear.weight = self.token_embedding.weight
 
     def _init_model_weights(self, std: float = 0.02) -> None:
         self.apply(lambda module: self._init_weights(module, std=std))
