@@ -189,7 +189,7 @@ def train_model(config: dict):
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'lr_scheduler_state_dict': lr_scheduler.state_dict(),
-                'gpt_config': vars(gpt_config),
+                'config': vars(gpt_config),
                 'accum_train_loss': accum_train_loss,
             }
             model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
