@@ -1,19 +1,19 @@
 import argparse
 from contextlib import nullcontext
-import os
 import numpy as np
+import os
 from tqdm.autonotebook import tqdm
-from typing import Tuple, Dict
+from typing import Dict, Tuple
 
 from tokenizers import Tokenizer
 
+from torch import Tensor
 import torch
 import torch.nn as nn
-from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 
-import utils
 from model import GPT, GPTConfig
+import utils
 
 
 def get_batch(data_ids, batch_size: int, seq_length: int) -> Tuple[Tensor, Tensor]:

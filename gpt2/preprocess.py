@@ -3,13 +3,13 @@ prepare dataset and tokenizer for training
 """
 
 import argparse
-import os
 import numpy as np
+import os
 
+from tokenizers import AddedToken, Tokenizer
 import tokenizers
-from tokenizers import Tokenizer, AddedToken
-import tokenizers.models
 import tokenizers.decoders
+import tokenizers.models
 import tokenizers.pre_tokenizers
 import tokenizers.trainers
 

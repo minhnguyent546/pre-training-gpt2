@@ -5,14 +5,16 @@ references:
   nanoGPT implementation: https://github.com/karpathy/nanoGPT
 """
 
+from dataclasses import dataclass
 import math
 from typing import Optional, Union
-from dataclasses import dataclass
 
+from torch import Tensor
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch import Tensor
+import torch.nn.functional as Fun
+
+import utils
 
 
 def scaled_dot_product_attention(
@@ -27,7 +29,7 @@ def scaled_dot_product_attention(
     if mask is not None:
         attention_probs.masked_fill_(mask == False, float('-inf'))
 
-    attention_probs = F.softmax(attention_probs, dim=-1)
+    attention_probs = Fun.softmax(attention_probs, dim=-1)
     if dropout is not None:
         if isinstance(dropout, float):
             dropout = nn.Dropout(dropout)
@@ -218,7 +220,14 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
 
     @torch.no_grad()
-    def generate(self, ids: Tensor, max_new_tokens: int = 100, temperature: float = 1.0) -> Tensor:
+    def generate(
+        self,
+        ids: Tensor,
+        max_new_tokens: int = 100,
+        temperature: float = 1.0,
+        top_k: int = 0,
+        top_p: float = 1.0,
+        ) -> Tensor:
         # ids has shape (batch_size, seq_length)
         ids = ids.detach().clone()
 
@@ -238,8 +247,9 @@ class GPT(nn.Module):
                 logits /= temperature
             except ZeroDivisionError:
                 pass
-
-            probs = F.softmax(logits, dim=-1)
+            logits = utils.top_k_logits(logits, top_k=top_k)
+            logits = utils.top_p_logits(logits, top_p=top_p)
+            probs = Fun.softmax(logits, dim=-1)
 
             # next predicted token
             # take this

@@ -1,7 +1,7 @@
 import argparse
 
-import torch
 from torch import Tensor
+import torch
 
 from tokenizers import Tokenizer
 
@@ -40,6 +40,18 @@ def parse_opts(parser):
         type=int,
         default=100,
     )
+    parser.add_argument(
+        '--top-k',
+        help='Take only top-k highest probability tokens',
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
+        '--top-p',
+        help='Take highest probability tokens until the cumulative probability exceeds this value (nucleus sampling)',
+        type=float,
+        default=1.0,
+    )
 
 def main():
     parser = argparse.ArgumentParser(
@@ -66,7 +78,13 @@ def main():
         start_ids = tokenizer.encode(start_sentence).ids
         start_ids = Tensor(start_ids).type(torch.int32).unsqueeze_(0).to(device)
 
-        gen_ids = model.generate(start_ids, max_new_tokens=args.max_new_tokens, temperature=args.temperature)
+        gen_ids = model.generate(
+            start_ids,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+        )
         gen_ids = gen_ids.detach().cpu().numpy()[0]
         gen_sentence = tokenizer.decode(gen_ids, skip_special_tokens=False)
         print(gen_sentence)
