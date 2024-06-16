@@ -54,7 +54,7 @@ def train_model(config: dict):
 
     # load data
     train_ids = np.fromfile(os.path.join(data_save_path, 'train.bin'), dtype=np.int16)
-    test_ids = np.fromfile(os.path.join(data_save_path, 'train.bin'), dtype=np.int16)
+    test_ids = np.fromfile(os.path.join(data_save_path, 'test.bin'), dtype=np.int16)
 
     # load trained tokenizer
     tokenizer = Tokenizer.from_file(os.path.join(checkpoints_dir, config['tokenizer_basename']))
