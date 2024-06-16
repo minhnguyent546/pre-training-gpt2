@@ -77,7 +77,9 @@ def preprocess(config: dict):
     # save as bin files
     data_save_path = utils.ensure_dir(config['data_save_path'])
     train_ids.tofile(os.path.join(data_save_path, 'train.bin'))
+    print(f'Saved {len(train_ids)} tokens to {os.path.join(data_save_path, "train.bin")}')
     test_ids.tofile(os.path.join(data_save_path, 'test.bin'))
+    print(f'Saved {len(test_ids)} tokens to {os.path.join(data_save_path, "test.bin")}')
 
     # save tokenizer
     checkpoints_dir = utils.ensure_dir(config['checkpoints_dir'])
