@@ -1,5 +1,5 @@
 """
-prepare dataset and tokenizer for training
+Preparing dataset and tokenizer for training
 """
 
 import argparse
@@ -47,8 +47,16 @@ def preprocess(config: dict):
 
     data_file_path = config['data_file_path']
     with open(data_file_path, 'r', encoding='utf-8') as f:
-        data = f.read()
+        data = f.readlines()
 
+    # clean text
+    data = [
+        utils.clean_text(line, strip=True, keep_punct=True)
+        for line in data
+    ]
+    # remove empty line
+    data = [line for line in data if line]
+    data = '\n'.join(data)
     tokenizer = build_tokenizer(utils.chunks(data), vocab_size=config['vocab_size'])
     print(f'Vocab size: {tokenizer.get_vocab_size()}')
 
@@ -62,7 +70,7 @@ def preprocess(config: dict):
     train_ids = tokenizer.encode(train_data).ids
     test_ids = tokenizer.encode(test_data).ids
 
-    print('save to bin files')
+    print('Save to bin files')
     train_ids = np.array(train_ids, dtype=np.int16)
     test_ids = np.array(test_ids, dtype=np.int16)
 

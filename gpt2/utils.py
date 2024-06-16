@@ -1,12 +1,14 @@
 import os
 import random
+import regex
+import unicodedata
 import yaml
 
 import numpy as np
 
-from torch import Tensor
 import torch
 import torch.nn.functional as Fun
+from torch import Tensor
 
 
 def set_seed(seed: int = 0x3f3f3f3f):
@@ -79,3 +81,15 @@ def top_p_logits(logits: Tensor, top_p: float = 1.0) -> Tensor:
     )
     logits[~indices_to_keep] = float('-inf')
     return logits
+
+def clean_text(text: str, *, strip: bool = True, keep_punct: bool = True) -> str:
+    # NFC normalization
+    text = unicodedata.normalize('NFC', text)
+    # remove non-latin characters (but keep numbers, punctuations, and whitespaces)
+    if keep_punct:
+        text = regex.sub(r'([^\p{Latin}\p{Punctuation}0-9\s]+)', r'', text)
+    else:
+        text = regex.sub(r'([^\p{Latin}0-9\s]+)', r'', text)
+    if strip:
+        text = text.strip()
+    return text

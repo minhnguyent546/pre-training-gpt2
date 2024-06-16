@@ -12,10 +12,10 @@ test_size: 0.1
 # model
 vocab_size: 32_000
 seq_length: 128
-d_model: 384
-num_layers: 6
-num_heads: 6
-d_ff: 1536
+d_model: 768
+num_layers: 12
+num_heads: 12
+d_ff: 3072
 dropout: 0.1
 activation: gelu
 
@@ -27,7 +27,7 @@ warmup_steps: 4_000
 batch_size: 32
 fp16: false
 train_steps: 40_000
-valid_steps: 1_000
+valid_steps: 2_000
 valid_interval: 3_000
 save_interval: 4_000
 max_grad_norm: 1.0

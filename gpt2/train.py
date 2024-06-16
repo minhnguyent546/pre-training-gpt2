@@ -1,3 +1,5 @@
+"""Pretraining GPT-2 with language modeling objective."""
+
 import argparse
 from contextlib import nullcontext
 import numpy as np
