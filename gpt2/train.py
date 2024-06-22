@@ -153,6 +153,7 @@ def train_model(config: dict):
     torch.cuda.empty_cache()
     batch_loss = 0.0
     global_step = initial_step
+    batch_idx = 0
     while global_step < train_steps:
         optimizer.zero_grad()
 
@@ -169,7 +170,7 @@ def train_model(config: dict):
 
         scaler.scale(loss).backward()
 
-        if (global_step + 1) % gradient_accum_step == 0 or global_step + 1 == train_steps:
+        if (batch_idx + 1) % gradient_accum_step == 0 or batch_idx + 1 == train_steps:
             if config['max_grad_norm'] > 0:
                 scaler.unscale_(optimizer)
                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
@@ -209,6 +210,8 @@ def train_model(config: dict):
 
             global_step += 1
             train_iter.update()
+
+        batch_idx += 1
 
 def main():
     parser = argparse.ArgumentParser(
