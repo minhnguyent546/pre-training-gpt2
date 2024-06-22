@@ -7,12 +7,13 @@ import os
 from tqdm.autonotebook import tqdm
 from typing import Dict, Tuple
 
+import wandb
+
 from tokenizers import Tokenizer
 
 from torch import Tensor
 import torch
 import torch.nn as nn
-from torch.utils.tensorboard import SummaryWriter
 
 from model import GPT, GPTConfig
 import utils
@@ -60,8 +61,12 @@ def train_model(config: dict):
     tokenizer = Tokenizer.from_file(os.path.join(checkpoints_dir, config['tokenizer_basename']))
     config['vocab_size'] = tokenizer.get_vocab_size()
 
-    # tensorboard
-    writer = SummaryWriter(config['expr_name'])
+    # logging with wandb
+    wandb.init(
+        project=config['project_name'],
+        name=config['expr_name'],
+        config=config,
+    )
 
     # training device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -166,23 +171,20 @@ def train_model(config: dict):
         scaler.update()
 
         for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-            writer.add_scalar(f'learning_rate/group-{group_id}', group_lr, global_step)
+            wandb.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
+        wandb.log({'loss/batch_loss': loss.item()}, step=global_step)
 
         lr_scheduler.step()
 
         train_iter.set_postfix({'loss': loss.item()})
         accum_train_loss += loss.item()
 
-        writer.add_scalar('loss/batch_loss', loss.item(), global_step)
-        writer.flush()
-
         if (global_step + 1) % valid_interval == 0:
             valid_results = eval_model(model, test_ids, valid_steps, criterion, config)
-            writer.add_scalars('loss', {
-                'train': accum_train_loss / valid_interval,
-                'valid': valid_results['loss'],
-            }, global_step + 1)
-            writer.flush()
+            wandb.log({
+                'loss/train': accum_train_loss / valid_interval,
+                'loss/valid': valid_results['loss'],
+            }, step=global_step + 1)
             accum_train_loss = 0.0
 
         if (global_step + 1) % save_interval == 0:

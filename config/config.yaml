@@ -1,7 +1,8 @@
 # general options
 checkpoints_dir: checkpoints
 tokenizer_basename: tokenizer.json
-expr_name: runs/gpt2
+project_name: pre-training-gpt2
+expr_name: wala
 seed: 1061109567
 
 # dataset
