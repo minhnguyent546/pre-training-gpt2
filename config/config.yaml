@@ -3,6 +3,7 @@ checkpoints_dir: checkpoints
 tokenizer_basename: tokenizer.json
 project_name: pre-training-gpt2
 expr_name: wala
+wandb_resume_id: null
 seed: 1061109567
 
 # dataset

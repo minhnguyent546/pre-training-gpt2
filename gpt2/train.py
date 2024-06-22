@@ -66,6 +66,8 @@ def train_model(config: dict):
         project=config['project_name'],
         name=config['expr_name'],
         config=config,
+        id=config['wandb_resume_id'],
+        resume='must' if config['wandb_resume_id'] is not None else None,
     )
 
     # training device
