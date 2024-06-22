@@ -143,15 +143,17 @@ def train_model(config: dict):
     valid_steps = config['valid_steps']
     valid_interval = config['valid_interval']
     save_interval = config['save_interval']
+    gradient_accum_step = config['gradient_accum_step']
     model.train()
 
     num_parameters = sum(param.numel() for param in model.parameters() if param.requires_grad)
     print(f'Model has {num_parameters / 10 ** 6:0.2f}M parameters')
 
     train_iter = tqdm(range(initial_step, train_steps), desc='Training model')
-    for global_step in train_iter:
-        torch.cuda.empty_cache()
-
+    torch.cuda.empty_cache()
+    batch_loss = 0.0
+    global_step = initial_step
+    while global_step < train_steps:
         optimizer.zero_grad()
 
         with autocast_context:
@@ -161,43 +163,52 @@ def train_model(config: dict):
             logits = model(inputs)
             loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
 
+        if gradient_accum_step > 1:
+            loss /= gradient_accum_step
+        batch_loss += loss.item()
+
         scaler.scale(loss).backward()
 
-        if config['max_grad_norm'] > 0:
-            scaler.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
+        if (global_step + 1) % gradient_accum_step == 0 or global_step + 1 == train_steps:
+            if config['max_grad_norm'] > 0:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
 
-        scaler.step(optimizer)
-        scaler.update()
+            scaler.step(optimizer)
+            scaler.update()
 
-        for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-            wandb.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
-        wandb.log({'loss/batch_loss': loss.item()}, step=global_step)
+            for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
+                wandb.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
+            wandb.log({'loss/batch_loss': batch_loss}, step=global_step)
 
-        lr_scheduler.step()
+            lr_scheduler.step()
 
-        train_iter.set_postfix({'loss': loss.item()})
-        accum_train_loss += loss.item()
+            train_iter.set_postfix({'loss': f'{batch_loss:0.3f}'})
+            accum_train_loss += batch_loss
+            batch_loss = 0.0
 
-        if (global_step + 1) % valid_interval == 0:
-            valid_results = eval_model(model, test_ids, valid_steps, criterion, config)
-            wandb.log({
-                'loss/train': accum_train_loss / valid_interval,
-                'loss/valid': valid_results['loss'],
-            }, step=global_step + 1)
-            accum_train_loss = 0.0
+            if (global_step + 1) % valid_interval == 0:
+                valid_results = eval_model(model, test_ids, valid_steps, criterion, config)
+                wandb.log({
+                    'loss/train': accum_train_loss / valid_interval,
+                    'loss/valid': valid_results['loss'],
+                }, step=global_step + 1)
+                accum_train_loss = 0.0
 
-        if (global_step + 1) % save_interval == 0:
-            checkpoint_dict = {
-                'global_step': global_step + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'lr_scheduler_state_dict': lr_scheduler.state_dict(),
-                'config': vars(gpt_config),
-                'accum_train_loss': accum_train_loss,
-            }
-            model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
-            torch.save(checkpoint_dict, model_save_path)
+            if (global_step + 1) % save_interval == 0:
+                checkpoint_dict = {
+                    'global_step': global_step + 1,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'lr_scheduler_state_dict': lr_scheduler.state_dict(),
+                    'config': vars(gpt_config),
+                    'accum_train_loss': accum_train_loss,
+                }
+                model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
+                torch.save(checkpoint_dict, model_save_path)
+
+            global_step += 1
+            train_iter.update()
 
 def main():
     parser = argparse.ArgumentParser(
