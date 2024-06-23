@@ -2,8 +2,7 @@
 checkpoints_dir: checkpoints
 tokenizer_basename: tokenizer.json
 project_name: pre-training-gpt2
-expr_name: wala
-wandb_resume_id: null
+expr_name: base
 seed: 1061109567
 
 # dataset
@@ -22,6 +21,8 @@ dropout: 0.1
 activation: gelu
 
 # training
+wandb_logging: true
+wandb_resume_id: null
 optim: adamw # possible values are: adam, adamw
 weight_decay: 1.0e-4
 lr: 0.5

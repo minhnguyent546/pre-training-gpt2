@@ -62,13 +62,15 @@ def train_model(config: dict):
     config['vocab_size'] = tokenizer.get_vocab_size()
 
     # logging with wandb
-    wandb.init(
-        project=config['project_name'],
-        name=config['expr_name'],
-        config=config,
-        id=config['wandb_resume_id'],
-        resume='must' if config['wandb_resume_id'] is not None else None,
-    )
+    wandb_run = None
+    if config['wandb_logging']:
+        wandb_run = wandb.init(
+            project=config['project_name'],
+            name=config['expr_name'],
+            config=config,
+            id=config['wandb_resume_id'],
+            resume='must' if config['wandb_resume_id'] is not None else None,
+        )
 
     # training device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -180,9 +182,10 @@ def train_model(config: dict):
             scaler.step(optimizer)
             scaler.update()
 
-            for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-                wandb.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
-            wandb.log({'loss/batch_loss': batch_loss}, step=global_step)
+            if wandb_run is not None:
+                for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
+                    wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
+                wandb_run.log({'loss/batch_loss': batch_loss}, step=global_step)
 
             lr_scheduler.step()
 
@@ -192,10 +195,11 @@ def train_model(config: dict):
 
             if (global_step + 1) % valid_interval == 0:
                 valid_results = eval_model(model, test_ids, valid_steps, criterion, config)
-                wandb.log({
-                    'loss/train': accum_train_loss / valid_interval,
-                    'loss/valid': valid_results['loss'],
-                }, step=global_step + 1)
+                if wandb_run is not None:
+                    wandb_run.log({
+                        'loss/train': accum_train_loss / valid_interval,
+                        'loss/valid': valid_results['loss'],
+                    }, step=global_step + 1)
                 accum_train_loss = 0.0
 
             if (global_step + 1) % save_interval == 0:
