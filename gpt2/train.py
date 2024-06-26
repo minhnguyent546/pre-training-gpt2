@@ -14,6 +14,8 @@ from tokenizers import Tokenizer
 from torch import Tensor
 import torch
 import torch.nn as nn
+from torch.distributed import init_process_group, destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from model import GPT, GPTConfig
 import utils
@@ -26,7 +28,7 @@ def get_batch(data_ids, batch_size: int, seq_length: int) -> Tuple[Tensor, Tenso
     return inputs, labels
 
 @torch.no_grad()
-def eval_model(model: GPT, test_ids, valid_steps: int, criterion, config: dict) -> Dict[str, float]:
+def eval_model(model: GPT | DDP, test_ids, valid_steps: int, criterion, config: dict) -> Dict[str, float]:
     is_training = model.training
     model.eval()
     accum_valid_loss = 0.0
@@ -63,7 +65,7 @@ def train_model(config: dict):
 
     # logging with wandb
     wandb_run = None
-    if config['wandb_logging']:
+    if config['wandb_logging'] and config['master_process']:
         wandb_run = wandb.init(
             project=config['project_name'],
             name=config['expr_name'],
@@ -75,6 +77,14 @@ def train_model(config: dict):
     # training device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
+
+    # mixed precision training with fp16
+    dtype = torch.float32
+    autocast_context = nullcontext()
+    if config['fp16'] and torch.cuda.is_available():
+        dtype = torch.float16
+        autocast_context = torch.cuda.amp.autocast(dtype=dtype)
+    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == torch.float16))
 
     # resume from previous checkpoint
     preload_checkpoint = config['preload_checkpoint']
@@ -99,6 +109,8 @@ def train_model(config: dict):
             'lr_scheduler_state_dict',
             'config'
         ]
+        if scaler.is_enabled():
+            required_keys.append('scaler_state_dict')
         for key in required_keys:
             if key not in saved_states:
                 raise ValueError(f'Missing key "{key}" in checkpoint')
@@ -129,18 +141,18 @@ def train_model(config: dict):
         model.load_state_dict(saved_states['model_state_dict'])
         optimizer.load_state_dict(saved_states['optimizer_state_dict'])
         lr_scheduler.load_state_dict(saved_states['lr_scheduler_state_dict'])
+        if scaler.is_enabled():
+            scaler.load_state_dict(saved_states['scaler_state_dict'])
         if 'global_step' in saved_states:
             initial_step = saved_states['global_step']
         if 'accum_train_loss' in saved_states:
             accum_train_loss = saved_states['accum_train_loss']
 
-    # mixed precision training with fp16
-    dtype = torch.float32
-    autocast_context = nullcontext()
-    if config['fp16'] and torch.cuda.is_available():
-        dtype = torch.float16
-        autocast_context = torch.cuda.amp.autocast(dtype=dtype)
-    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == torch.float16))
+    # convert the model to distributed data parallel
+    raw_model = model
+    if config['ddp']:
+        model = DDP(model, device_ids=[config['local_rank']])
+        raw_model = model.module
 
     # training loop
     train_steps = config['train_steps']
@@ -150,10 +162,15 @@ def train_model(config: dict):
     gradient_accum_step = config['gradient_accum_step']
     model.train()
 
-    num_parameters = sum(param.numel() for param in model.parameters() if param.requires_grad)
-    print(f'Model has {num_parameters / 10 ** 6:0.2f}M parameters')
+    if config['master_process']:
+        num_parameters = sum(param.numel() for param in model.parameters() if param.requires_grad)
+        print(f'Model has {num_parameters / 10 ** 6:0.2f}M parameters')
 
-    train_iter = tqdm(range(initial_step, train_steps), desc='Training model')
+    train_iter = tqdm(
+        range(initial_step, train_steps),
+        desc=f'Training model on gpu {config["local_rank"]}',
+        disable=config['local_rank'] != 0,
+    )
     torch.cuda.empty_cache()
     batch_loss = 0.0
     global_step = initial_step
@@ -161,6 +178,10 @@ def train_model(config: dict):
     while global_step < train_steps:
         optimizer.zero_grad()
 
+        if config['ddp']:
+            # we only sync gradients at the last step of gradient accumulation
+            # we can use the above trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
+            model.require_backward_grad_sync = (batch_idx + 1) % gradient_accum_step == 0
         with autocast_context:
             inputs, labels = get_batch(train_ids, config['batch_size'], config['seq_length'])
             inputs = inputs.to(device)
@@ -193,7 +214,7 @@ def train_model(config: dict):
             accum_train_loss += batch_loss
             batch_loss = 0.0
 
-            if (global_step + 1) % valid_interval == 0:
+            if config['master_process'] and (global_step + 1) % valid_interval == 0:
                 valid_results = eval_model(model, test_ids, valid_steps, criterion, config)
                 if wandb_run is not None:
                     wandb_run.log({
@@ -202,15 +223,17 @@ def train_model(config: dict):
                     }, step=global_step + 1)
                 accum_train_loss = 0.0
 
-            if (global_step + 1) % save_interval == 0:
+            if config['master_process'] and (global_step + 1) % save_interval == 0:
                 checkpoint_dict = {
                     'global_step': global_step + 1,
-                    'model_state_dict': model.state_dict(),
+                    'model_state_dict': raw_model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'lr_scheduler_state_dict': lr_scheduler.state_dict(),
                     'config': vars(gpt_config),
                     'accum_train_loss': accum_train_loss,
                 }
+                if scaler.is_enabled():
+                    checkpoint_dict['scaler_state_dict'] = scaler.state_dict()
                 model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
                 torch.save(checkpoint_dict, model_save_path)
 
@@ -232,8 +255,35 @@ def main():
     )
     args = parser.parse_args()
     config = utils.load_yaml_config(args.config)
+
+    config['local_rank'] = os.environ.get('LOCAL_RANK', -1)
+    config['rank'] = os.environ.get('RANK', -1)
+    config['world_size'] = os.environ.get('WOLRD_SIZE', -1)
+
+    config['ddp'] = config['rank'] != -1
+    config['master_process'] = config['rank'] in (-1, 0)
+    if config['ddp']:
+        assert config['local_rank'] != -1
+        assert config['world_size'] != -1
+
+        # init process group
+        init_process_group(backend='ncll')  # ncll, gloo, etc
+
+        # set appropriate CUDA device
+        os.environ['CUDA_VISIBLE_DEVICES'] = config['local_rank']
+
+        # scale down the gradient accumulation step
+        # do we need this?
+        # assert config['gradient_accum_step'] % config['world_size'] == 0
+        # config['gradient_accum_step'] //= config['world_size']
+
+        # add offset for seed
+        config['seed'] += config['rank']
+
     train_model(config)
 
+    if config['ddp']:
+        destroy_process_group()
 
 if __name__ == '__main__':
     main()
