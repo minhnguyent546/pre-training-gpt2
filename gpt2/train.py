@@ -151,7 +151,7 @@ def train_model(config: dict):
     # convert the model to distributed data parallel
     raw_model = model
     if config['ddp']:
-        model = DDP(model, device_ids=[config['local_rank']])
+        model = DDP(model, device_ids=[config['local_rank']], output_device=config['local_rank'])
         raw_model = model.module
 
     # training loop
@@ -265,7 +265,7 @@ def main():
         config['world_size'] = int(os.environ['WORLD_SIZE'])
 
         # set appropriate CUDA device
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(config['local_rank'])
+        torch.cuda.set_device(config['local_rank'])
 
         # init process group
         init_process_group(backend='nccl')  # nccl, gloo, etc
