@@ -168,7 +168,7 @@ def train_model(config: dict):
 
     train_iter = tqdm(
         range(initial_step, train_steps),
-        desc=f'Training model on gpu{config.get(" local_rank", "")}',
+        desc=f'Training model on gpu {config.get("local_rank", "")}',
         disable=config['local_rank'] != 0,
     )
     torch.cuda.empty_cache()
