@@ -13,7 +13,7 @@ import tokenizers.models
 import tokenizers.pre_tokenizers
 import tokenizers.trainers
 
-import utils
+import gpt2.utils as utils
 
 
 def build_tokenizer(

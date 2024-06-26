@@ -17,8 +17,8 @@ import torch.nn as nn
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from model import GPT, GPTConfig
-import utils
+from gpt2.model import GPT, GPTConfig
+import gpt2.utils as utils
 
 
 def get_batch(data_ids, batch_size: int, seq_length: int) -> Tuple[Tensor, Tensor]:

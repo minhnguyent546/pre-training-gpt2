@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as Fun
 
-import utils
+import gpt2.utils as utils
 
 
 def scaled_dot_product_attention(

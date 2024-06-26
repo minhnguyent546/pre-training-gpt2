@@ -5,8 +5,8 @@ import torch
 
 from tokenizers import Tokenizer
 
-from model import GPT, GPTConfig
-import utils
+from gpt2.model import GPT, GPTConfig
+import gpt2.utils as utils
 
 
 def parse_opts(parser):
