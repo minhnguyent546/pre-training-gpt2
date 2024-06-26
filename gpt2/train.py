@@ -166,11 +166,15 @@ def train_model(config: dict):
         num_parameters = sum(param.numel() for param in model.parameters() if param.requires_grad)
         print(f'Model has {num_parameters / 10 ** 6:0.2f}M parameters')
 
-    train_iter = tqdm(
-        range(initial_step, train_steps),
-        desc=f'Training model on gpu {config.get("local_rank", "")}',
-        disable=config['local_rank'] != 0,
-    )
+    if config['ddp']:
+        train_iter = tqdm(
+            range(initial_step, train_steps),
+            desc=f'Training model on rank {config["rank"]}',
+            disable=config['local_rank'] != 0,
+        )
+    else:
+        train_iter = tqdm(range(initial_step, train_steps), desc=f'Training model')
+
     torch.cuda.empty_cache()
     batch_loss = 0.0
     global_step = initial_step
