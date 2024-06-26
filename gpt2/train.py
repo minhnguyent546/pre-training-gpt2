@@ -258,7 +258,7 @@ def main():
 
     config['local_rank'] = os.environ.get('LOCAL_RANK', -1)
     config['rank'] = os.environ.get('RANK', -1)
-    config['world_size'] = os.environ.get('WOLRD_SIZE', -1)
+    config['world_size'] = os.environ.get('WORLD_SIZE', -1)
 
     config['ddp'] = config['rank'] != -1
     config['master_process'] = config['rank'] in (-1, 0)
@@ -267,7 +267,7 @@ def main():
         assert config['world_size'] != -1
 
         # init process group
-        init_process_group(backend='ncll')  # ncll, gloo, etc
+        init_process_group(backend='nccl')  # nccl, gloo, etc
 
         # set appropriate CUDA device
         os.environ['CUDA_VISIBLE_DEVICES'] = config['local_rank']
