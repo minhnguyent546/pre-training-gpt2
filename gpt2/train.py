@@ -256,21 +256,19 @@ def main():
     args = parser.parse_args()
     config = utils.load_yaml_config(args.config)
 
-    config['local_rank'] = os.environ.get('LOCAL_RANK', -1)
-    config['rank'] = os.environ.get('RANK', -1)
-    config['world_size'] = os.environ.get('WORLD_SIZE', -1)
+    config['rank'] = int(os.environ.get('RANK', -1))
 
     config['ddp'] = config['rank'] != -1
     config['master_process'] = config['rank'] in (-1, 0)
     if config['ddp']:
-        assert config['local_rank'] != -1
-        assert config['world_size'] != -1
+        config['local_rank'] = int(os.environ['LOCAL_RANK'])
+        config['world_size'] = int(os.environ['WORLD_SIZE'])
 
         # init process group
         init_process_group(backend='nccl')  # nccl, gloo, etc
 
         # set appropriate CUDA device
-        os.environ['CUDA_VISIBLE_DEVICES'] = config['local_rank']
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(config['local_rank'])
 
         # scale down the gradient accumulation step
         # do we need this?
