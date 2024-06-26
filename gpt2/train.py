@@ -264,11 +264,11 @@ def main():
         config['local_rank'] = int(os.environ['LOCAL_RANK'])
         config['world_size'] = int(os.environ['WORLD_SIZE'])
 
-        # init process group
-        init_process_group(backend='nccl')  # nccl, gloo, etc
-
         # set appropriate CUDA device
         os.environ['CUDA_VISIBLE_DEVICES'] = str(config['local_rank'])
+
+        # init process group
+        init_process_group(backend='nccl')  # nccl, gloo, etc
 
         # scale down the gradient accumulation step
         # do we need this?
