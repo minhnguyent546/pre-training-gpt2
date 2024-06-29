@@ -19,10 +19,21 @@ def add_opts(parser: argparse.ArgumentParser):
         default=1061109567,
     )
     parser.add_argument(
+        '--out-dir',
+        help='Output directory',
+        type=str,
+        default='./oscar-vi',
+    )
+    parser.add_argument(
         '--split',
         help='Which split to download',
         type=str,
         default='unshuffled_original_vi',
+    )
+    parser.add_argument(
+        '--verify-data',
+        help='Whether to verify the downloaded data',
+        action='store_true',
     )
     parser.add_argument(
         '--val-size',
@@ -56,7 +67,7 @@ def main():
         split=f'train[:{args.max_num_docs}]' if args.max_num_docs else 'train',
         num_proc=args.num_workers,
         trust_remote_code=True,
-        verification_mode=VerificationMode.NO_CHECKS,
+        verification_mode=VerificationMode.BASIC_CHECKS if args.verify_data else VerificationMode.NO_CHECKS,
     )
     val_size = args.val_size
     if val_size > 1:
