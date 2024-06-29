@@ -34,7 +34,7 @@ def eval_model(model: GPT | DDP, test_ids, valid_steps: int, criterion, config: 
     accum_valid_loss = 0.0
     valid_iter = tqdm(range(valid_steps), desc='Validating model')
     for _ in valid_iter:
-        inputs, labels = get_batch(test_ids, config['batch_size'], config['seq_length'])
+        inputs, labels = get_batch(test_ids, config['eval_batch_size'], config['seq_length'])
         inputs = inputs.to(model.device)
         labels = labels.to(model.device)
         logits = model(inputs)
@@ -187,7 +187,7 @@ def train_model(config: dict):
             # we can use the above trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
             model.require_backward_grad_sync = (batch_idx + 1) % gradient_accum_step == 0
         with autocast_context:
-            inputs, labels = get_batch(train_ids, config['batch_size'], config['seq_length'])
+            inputs, labels = get_batch(train_ids, config['train_batch_size'], config['seq_length'])
             inputs = inputs.to(device)
             labels = labels.to(device)
             logits = model(inputs)
@@ -274,9 +274,10 @@ def main():
         # init process group
         init_process_group(backend='nccl')  # nccl, gloo, etc
 
-        # scale down the gradient accumulation step
-        assert config['gradient_accum_step'] % config['world_size'] == 0
-        config['gradient_accum_step'] //= config['world_size']
+        # we need to divide the batch_size for batching across multiple-GPUs manually
+        for key in ('train_batch_size', 'eval_batch_size'):
+            assert config[key] % config['world_size'] == 0
+            config[key] //= config['world_size']
 
         # add offset for seed
         config['seed'] += config['rank']

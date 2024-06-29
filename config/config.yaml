@@ -27,7 +27,8 @@ optim: adamw # possible values are: adam, adamw
 weight_decay: 1.0e-4
 lr: 0.5
 warmup_steps: 4_000
-batch_size: 32
+train_batch_size: 32
+eval_batch_size: 16
 gradient_accum_step: 1
 fp16: false
 train_steps: 40_000
