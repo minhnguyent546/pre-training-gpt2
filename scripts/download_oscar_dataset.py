@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 
 """
-Downloading and slicing (if necessary) the OSCAR dataset (https://huggingface.co/datasets/oscar-corpus/oscar)
-from Huggingface for Vietnamese
+Downloading and slicing (if necessary) the OSCAR dataset (https://huggingface.co/datasets/oscar-corpus/oscar) from Huggingface
 """
 
 import argparse
 import os
 
 import datasets
+from datasets.utils.info_utils import VerificationMode
 
 
 def add_opts(parser: argparse.ArgumentParser):
@@ -19,10 +19,10 @@ def add_opts(parser: argparse.ArgumentParser):
         default=1061109567,
     )
     parser.add_argument(
-        '--out-dir',
-        help='Output directory',
+        '--split',
+        help='Which split to download',
         type=str,
-        default='./oscar-vi',
+        default='unshuffled_original_vi',
     )
     parser.add_argument(
         '--val-size',
@@ -52,10 +52,11 @@ def main():
 
     raw_dataset: datasets.Dataset = datasets.load_dataset(
         'oscar',
-        'unshuffled_original_vi',
+        args.split,
         split=f'train[:{args.max_num_docs}]' if args.max_num_docs else 'train',
         num_proc=args.num_workers,
         trust_remote_code=True,
+        verification_mode=VerificationMode.NO_CHECKS,
     )
     val_size = args.val_size
     if val_size > 1:
