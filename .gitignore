@@ -1,2 +1,9 @@
+# python stuff
 __pycache__
+.ipynb_checkpoints
+
+# local files
+_** # file starting with an underscore
+!__init__.py
 /config/config-local.yaml
+/wandb
