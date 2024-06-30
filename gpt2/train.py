@@ -2,76 +2,84 @@
 
 import argparse
 from contextlib import nullcontext
-import numpy as np
 import os
 from tqdm.autonotebook import tqdm
-from typing import Dict, Tuple
+from typing import Dict, Any, Literal
 
 import wandb
 
+import datasets
 from tokenizers import Tokenizer
 
-from torch import Tensor
 import torch
 import torch.nn as nn
-from torch.distributed import init_process_group, destroy_process_group
+import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader
 
 from gpt2.model import GPT, GPTConfig
 import gpt2.utils as utils
+from gpt2.monolingual_dataset import MonolingualDataset
 
 
-def get_batch(data_ids, batch_size: int, seq_length: int) -> Tuple[Tensor, Tensor]:
-    indices = torch.randint(high=len(data_ids) - seq_length, size=(batch_size,))
-    inputs = torch.stack([torch.from_numpy(data_ids[idx:idx+seq_length]).type(torch.int32) for idx in indices])
-    labels = torch.stack([torch.from_numpy(data_ids[idx+1:idx+1+seq_length]).type(torch.int64) for idx in indices])
-    return inputs, labels
-
-@torch.no_grad()
-def eval_model(model: GPT | DDP, test_ids, valid_steps: int, criterion, config: dict) -> Dict[str, float]:
-    is_training = model.training
-    model.eval()
-    accum_valid_loss = 0.0
-    valid_iter = tqdm(range(valid_steps), desc='Validating model')
-    for _ in valid_iter:
-        inputs, labels = get_batch(test_ids, config['eval_batch_size'], config['seq_length'])
-        inputs = inputs.to(model.device)
-        labels = labels.to(model.device)
-        logits = model(inputs)
-        loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
-        accum_valid_loss += loss.item()
-
-    accum_valid_loss /= valid_steps
-
-    model.train(is_training)
-
-    return {
-        'loss': accum_valid_loss,
-    }
-
-def train_model(config: dict):
+def train_model(config: dict[str, Any]):
     utils.set_seed(config['seed'])
 
-    data_save_path = utils.ensure_dir(config['data_save_path'])
     checkpoints_dir = utils.ensure_dir(config['checkpoints_dir'])
 
-    # load data
-    train_ids = np.fromfile(os.path.join(data_save_path, 'train.bin'), dtype=np.int16)
-    test_ids = np.fromfile(os.path.join(data_save_path, 'test.bin'), dtype=np.int16)
-
     # load trained tokenizer
-    tokenizer = Tokenizer.from_file(os.path.join(checkpoints_dir, config['tokenizer_basename']))
+    tokenizer: Tokenizer = Tokenizer.from_file(config['tokenizer'])
     config['vocab_size'] = tokenizer.get_vocab_size()
+
+    # load dataset
+    raw_dataset = datasets.load_dataset(
+        config['data_format'],
+        data_files={
+            'train': config['train_files'],
+            'validation': config['validation_files'],
+        },
+        num_proc=config['num_workers'],
+    )
+
+    # datasets, distributed samplers, and data loaders
+    train_dataset = MonolingualDataset(raw_dataset['train'], config['seq_length'], tokenizer)
+    validation_dataset = MonolingualDataset(raw_dataset['validation'], config['seq_length'], tokenizer, random_item=False)
+    if config['ddp']:
+        train_sampler = DistributedSampler(train_dataset, shuffle=True, seed=config['seed'])
+        validation_sampler = DistributedSampler(validation_dataset, shuffle=False, seed=config['seed'], drop_last=True)
+    else:
+        train_sampler = None
+        validation_sampler = None
+    train_data_loader = DataLoader(
+        train_dataset,
+        batch_size=config['train_batch_size'],
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
+        num_workers=config['num_workers'],
+        pin_memory=True,
+    )
+    validation_data_loader = DataLoader(
+        validation_dataset,
+        batch_size=config['eval_batch_size'],
+        shuffle=False,
+        sampler=validation_sampler,
+        num_workers=config['num_workers'],
+        pin_memory=True,
+    )
 
     # logging with wandb
     wandb_run = None
-    if config['wandb_logging'] and config['master_process']:
+    wandb_config = config['wandb']
+    if config['master_process'] and wandb_config['logging']:
         wandb_run = wandb.init(
-            project=config['project_name'],
-            name=config['expr_name'],
+            project=wandb_config['project'],
+            name=wandb_config['name'],
             config=config,
-            id=config['wandb_resume_id'],
-            resume='must' if config['wandb_resume_id'] is not None else None,
+            tags=wandb_config.get('tags', None),
+            notes=wandb_config.get('notes', None),
+            id=wandb_config.get('resume_id', None),
+            resume='must' if wandb_config.get('resume_id', None) is not None else None,
         )
 
     # training device
@@ -82,6 +90,7 @@ def train_model(config: dict):
     dtype = torch.float32
     autocast_context = nullcontext()
     if config['fp16'] and torch.cuda.is_available():
+        print('Training with fp16 precision')
         dtype = torch.float16
         autocast_context = torch.cuda.amp.autocast(dtype=dtype)
     scaler = torch.cuda.amp.GradScaler(enabled=(dtype == torch.float16))
@@ -104,13 +113,13 @@ def train_model(config: dict):
         print(f'Loading states from checkpoint {preload_checkpoint}')
         saved_states = torch.load(preload_checkpoint, map_location=device)
         required_keys = [
-            'model_state_dict',
-            'optimizer_state_dict',
-            'lr_scheduler_state_dict',
+            'model',
+            'optimizer',
+            'lr_scheduler',
             'config'
         ]
         if scaler.is_enabled():
-            required_keys.append('scaler_state_dict')
+            required_keys.append('scaler')
         for key in required_keys:
             if key not in saved_states:
                 raise ValueError(f'Missing key "{key}" in checkpoint')
@@ -136,17 +145,20 @@ def train_model(config: dict):
     )
 
     initial_step = 0
-    accum_train_loss = 0.0
+    running_loss = AverageMeter('running_loss', device=device)
     if saved_states is not None:
-        model.load_state_dict(saved_states['model_state_dict'])
-        optimizer.load_state_dict(saved_states['optimizer_state_dict'])
-        lr_scheduler.load_state_dict(saved_states['lr_scheduler_state_dict'])
+        model.load_state_dict(saved_states['model'])
+        optimizer.load_state_dict(saved_states['optimizer'])
+        lr_scheduler.load_state_dict(saved_states['lr_scheduler'])
         if scaler.is_enabled():
-            scaler.load_state_dict(saved_states['scaler_state_dict'])
+            scaler.load_state_dict(saved_states['scaler'])
         if 'global_step' in saved_states:
             initial_step = saved_states['global_step']
-        if 'accum_train_loss' in saved_states:
-            accum_train_loss = saved_states['accum_train_loss']
+        if 'running_loss' in saved_states:
+            if config['ddp']:
+                running_loss = AverageMeter(**saved_states['running_loss'][config['rank']])
+            else:
+                running_loss = AverageMeter(**saved_states['running_loss'])
 
     # convert the model to distributed data parallel
     raw_model = model
@@ -173,78 +185,88 @@ def train_model(config: dict):
             disable=config['local_rank'] != 0,
         )
     else:
-        train_iter = tqdm(range(initial_step, train_steps), desc=f'Training model')
+        train_iter = tqdm(range(initial_step, train_steps), desc='Training model')
 
-    torch.cuda.empty_cache()
     batch_loss = 0.0
     global_step = initial_step
-    batch_idx = 0
     while global_step < train_steps:
-        optimizer.zero_grad()
+        torch.cuda.empty_cache()
+        if train_sampler is not None:
+            train_sampler.set_epoch(global_step // len(train_data_loader))
 
-        if config['ddp']:
-            # we only sync gradients at the last step of gradient accumulation
-            # we can use the above trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
-            model.require_backward_grad_sync = (batch_idx + 1) % gradient_accum_step == 0
-        with autocast_context:
-            inputs, labels = get_batch(train_ids, config['train_batch_size'], config['seq_length'])
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            logits = model(inputs)
-            loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
+        for batch_idx, batch in enumerate(train_data_loader):
+            input_ids = batch['input_ids'].to(device).type(torch.int32)
+            labels = batch['labels'].to(device).type(torch.int64)
 
-        if gradient_accum_step > 1:
-            loss /= gradient_accum_step
-        batch_loss += loss.item()
+            optimizer.zero_grad()
 
-        scaler.scale(loss).backward()
+            if config['ddp']:
+                # we only sync gradients at the last step of gradient accumulation
+                # we can use the below trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
+                model.require_backward_grad_sync = (batch_idx + 1) % gradient_accum_step == 0
+            with autocast_context:
+                logits = model(input_ids)
+                loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
 
-        if (batch_idx + 1) % gradient_accum_step == 0 or batch_idx + 1 == train_steps:
-            if config['max_grad_norm'] > 0:
-                scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
+            if gradient_accum_step > 1:
+                loss /= gradient_accum_step
+            batch_loss += loss.item()
 
-            scaler.step(optimizer)
-            scaler.update()
+            scaler.scale(loss).backward()
 
-            if wandb_run is not None:
-                for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-                    wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
-                wandb_run.log({'loss/batch_loss': batch_loss}, step=global_step)
+            if (batch_idx + 1) % gradient_accum_step == 0 or batch_idx + 1 == len(train_data_loader):
+                if config['max_grad_norm'] > 0:
+                    scaler.unscale_(optimizer)
+                    nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
 
-            lr_scheduler.step()
+                scaler.step(optimizer)
+                scaler.update()
 
-            train_iter.set_postfix({'loss': f'{batch_loss:0.3f}'})
-            accum_train_loss += batch_loss
-            batch_loss = 0.0
-
-            if config['master_process'] and (global_step + 1) % valid_interval == 0:
-                valid_results = eval_model(model, test_ids, valid_steps, criterion, config)
                 if wandb_run is not None:
-                    wandb_run.log({
-                        'loss/train': accum_train_loss / valid_interval,
-                        'loss/valid': valid_results['loss'],
-                    }, step=global_step + 1)
-                accum_train_loss = 0.0
+                    for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
+                        wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
+                    wandb_run.log({'loss/batch_loss': batch_loss}, step=global_step)
 
-            if config['master_process'] and (global_step + 1) % save_interval == 0:
-                checkpoint_dict = {
-                    'global_step': global_step + 1,
-                    'model_state_dict': raw_model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'lr_scheduler_state_dict': lr_scheduler.state_dict(),
-                    'config': vars(gpt_config),
-                    'accum_train_loss': accum_train_loss,
-                }
-                if scaler.is_enabled():
-                    checkpoint_dict['scaler_state_dict'] = scaler.state_dict()
-                model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
-                torch.save(checkpoint_dict, model_save_path)
+                lr_scheduler.step()
 
-            global_step += 1
-            train_iter.update()
+                train_iter.set_postfix({'loss': f'{batch_loss:0.3f}'})
+                running_loss.update(batch_loss)
+                batch_loss = 0.0
 
-        batch_idx += 1
+                if config['master_process'] and (global_step + 1) % valid_interval == 0:
+                    valid_results = eval_model(model, criterion, validation_data_loader, config, valid_steps=valid_steps)
+                    if config['ddp']:
+                        running_loss.reduce(dst=config['rank'])
+                    if wandb_run is not None:
+                        wandb_run.log({
+                            'loss/train': running_loss.average,
+                            'loss/valid': valid_results['loss'],
+                        }, step=global_step + 1)
+                    running_loss.reset()
+
+                if config['master_process'] and (global_step + 1) % save_interval == 0:
+                    if config['ddp']:
+                        running_losses = [None for _ in range(config['world_size'])] if config['master_process'] else None
+                        dist.gather_object(vars(running_loss), running_losses, dst=config['rank'])
+                    else:
+                        running_losses = running_loss
+                    checkpoint_dict = {
+                        'model': raw_model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'lr_scheduler': lr_scheduler.state_dict(),
+                        'config': vars(gpt_config),
+                        'global_step': global_step + 1,
+                        'running_loss': running_losses,
+                    }
+                    if scaler.is_enabled():
+                        checkpoint_dict['scaler'] = scaler.state_dict()
+                    model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
+                    torch.save(checkpoint_dict, model_save_path)
+
+                global_step += 1
+                train_iter.update()
+                if global_step >= train_steps:
+                    break
 
 def main():
     parser = argparse.ArgumentParser(
@@ -260,8 +282,69 @@ def main():
     args = parser.parse_args()
     config = utils.load_yaml_config(args.config)
 
-    config['rank'] = int(os.environ.get('RANK', -1))
+    setup_ddp(config)
 
+    train_model(config)
+
+    if config['ddp']:
+        dist.destroy_process_group()
+
+@torch.no_grad()
+def eval_model(
+    model: GPT | DDP,
+    criterion,
+    eval_data_loader: DataLoader,
+    config: dict[str, Any],
+    valid_steps: int | None = None,
+) -> Dict[str, float]:
+    device = model.device
+    evaluation_loss = AverageMeter('evaluation_loss', device=device)
+
+    if valid_steps is None:
+        valid_steps = len(eval_data_loader)
+    else:
+        if config['ddp']:
+            assert valid_steps % config['world_size'] == 0, \
+                f'`valid_steps` must be divisible by `world_size` ({config["world_size"]})'
+            valid_steps //= config['world_size']
+        valid_steps = min(valid_steps, len(eval_data_loader))
+
+    if config['ddp']:
+        valid_iter = tqdm(
+            eval_data_loader,
+            total=valid_steps,
+            desc=f'Evaluating model on rank {config["rank"]}',
+            disable=config['local_rank'] != 0,
+        )
+    else:
+        valid_iter = tqdm(eval_data_loader, total=valid_steps, desc='Evaluating model')
+
+    is_training = model.training
+    model.eval()
+
+    for batch_idx, batch in enumerate(valid_iter):
+        input_ids = batch['input_ids'].to(device).type(torch.int32)
+        labels = batch['labels'].to(device).type(torch.int64)
+        # TODO: consider using fp16 for evaluation
+        logits = model(input_ids)
+        loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
+        evaluation_loss.update(loss.item())
+        valid_iter.set_postfix({'loss': f'{loss.item():0.3f}'})
+
+        if batch_idx + 1 >= valid_steps:
+            break
+
+    if config['ddp']:
+        evaluation_loss.reduce(dst=config['rank'])
+
+    model.train(is_training)
+
+    return {
+        'loss': evaluation_loss.average,
+    }
+
+def setup_ddp(config: dict[str, Any]) -> None:
+    config['rank'] = int(os.environ.get('RANK', -1))
     config['ddp'] = config['rank'] != -1
     config['master_process'] = config['rank'] in (-1, 0)
     if config['ddp']:
@@ -272,7 +355,7 @@ def main():
         torch.cuda.set_device(config['local_rank'])
 
         # init process group
-        init_process_group(backend='nccl')  # nccl, gloo, etc
+        dist.init_process_group(backend=config.get('ddp_backend', 'nccl'))  # nccl, gloo, etc
 
         # we need to divide the batch_size for batching across multiple-GPUs manually
         for key in ('train_batch_size', 'eval_batch_size'):
@@ -282,10 +365,65 @@ def main():
         # add offset for seed
         config['seed'] += config['rank']
 
-    train_model(config)
+class AverageMeter:
+    """A class for working with average meters."""
+    def __init__(
+        self,
+        name: str,
+        value: int | float = 0.0,
+        count: int = 0,
+        sum: int | float = 0.0,
+        device: torch.device | Literal['auto'] = 'auto',
+    ) -> None:
+        if count == 0:
+            value = 0
+            sum = 0
+        self.name = name
+        self.value = value
+        self.count = count
+        self.sum = sum
+        if device == 'auto':
+            device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        self.device = device
 
-    if config['ddp']:
-        destroy_process_group()
+    def update(self, value: int | float, nums: int = 1) -> None:
+        self.value = value
+        self.sum += value * nums
+        self.count += nums
+
+    def reduce(self, dst: int) -> None:
+        meters_to_reduce = torch.Tensor([self.sum, self.count], device=self.device).to(torch.float32)
+        # only `Tensor` of process with rank `dst` will be modified in-place,
+        # `Tensor` of other processes will remain the same
+        dist.reduce(meters_to_reduce, dst=dst, op=dist.ReduceOp.SUM)
+        self.sum, self.count = meters_to_reduce.tolist()
+
+    def all_reduce(self) -> None:
+        meters_to_reduce = torch.Tensor([self.sum, self.count], device=self.device).to(torch.float32)
+        dist.all_reduce(meters_to_reduce, op=dist.ReduceOp.SUM)
+        self.sum, self.count = meters_to_reduce.tolist()
+
+    @property
+    def average(self) -> float:
+        try:
+            return self.sum / self.count
+        except ZeroDivisionError:
+            return 0.0
+
+    def reset(self) -> None:
+        self.value = 0.0
+        self.sum = 0.0
+        self.count = 0
+
+    def __str__(self) -> str:
+        return (
+            f'{self.name}(value={self.value}, '
+            f'average={self.average}, '
+            f'sum={self.sum}, '
+            f'count={self.count}, '
+            f'device={self.device})'
+        )
+
 
 if __name__ == '__main__':
     main()

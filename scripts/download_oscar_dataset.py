@@ -55,7 +55,7 @@ def add_opts(parser: argparse.ArgumentParser):
 
 def main():
     parser = argparse.ArgumentParser(
-        'Prepare the OSCAR dataset',
+        'Download the OSCAR dataset',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_opts(parser)

@@ -1,14 +1,15 @@
 # general options
 checkpoints_dir: checkpoints
-tokenizer_basename: tokenizer.json
-project_name: pre-training-gpt2
-expr_name: base
+tokenizer: tokenizer.json
 seed: 1061109567
 
-# dataset
-data_file_path: ./datasets/example-data.txt
-data_save_path: ./datasets
-test_size: 0.1
+# datastet
+data_format: parquet
+train_files:
+  - oscar-vi/train.parquet
+validation_files:
+  - oscar-vi/validation.parquet
+num_workers: 1 # will be used in load_dataset, DataLoader, etc
 
 # model
 vocab_size: 32_000
@@ -20,9 +21,17 @@ d_ff: 3072
 dropout: 0.1
 activation: gelu
 
+# logging with wandb
+wandb:
+  logging: true
+  project: pre-training-gpt2
+  name: base
+  resume_id: null
+  notes: null
+  tags: null
+
 # training
-wandb_logging: true
-wandb_resume_id: null
+ddp_backend: nccl # nccl, gloo, etc
 optim: adamw # possible values are: adam, adamw
 weight_decay: 1.0e-4
 lr: 0.5
