@@ -12,7 +12,6 @@ validation_files:
 num_workers: 1 # will be used in load_dataset, DataLoader, etc
 
 # model
-vocab_size: 32_000
 seq_length: 128
 d_model: 768
 num_layers: 12
