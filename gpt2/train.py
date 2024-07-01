@@ -297,7 +297,7 @@ def eval_model(
 
     if config['ddp']:
         valid_iter = tqdm(
-            valid_steps,
+            range(valid_steps),
             total=valid_steps,
             desc=f'Evaluating model on rank {config["rank"]}',
             disable=config['local_rank'] != 0,
@@ -392,14 +392,14 @@ class AverageMeter:
         self.count += nums
 
     def reduce(self, dst: int) -> None:
-        meters_to_reduce = torch.Tensor([self.sum, self.count], device=self.device).to(torch.float32)
+        meters_to_reduce = torch.tensor([self.sum, self.count], dtype=torch.float32, device=self.device)
         # only `Tensor` of process with rank `dst` will be modified in-place,
         # `Tensor` of other processes will remain the same
         dist.reduce(meters_to_reduce, dst=dst, op=dist.ReduceOp.SUM)
         self.sum, self.count = meters_to_reduce.tolist()
 
     def all_reduce(self) -> None:
-        meters_to_reduce = torch.Tensor([self.sum, self.count], device=self.device).to(torch.float32)
+        meters_to_reduce = torch.tensor([self.sum, self.count], dtype=torch.float32, device=self.device)
         dist.all_reduce(meters_to_reduce, op=dist.ReduceOp.SUM)
         self.sum, self.count = meters_to_reduce.tolist()
 
