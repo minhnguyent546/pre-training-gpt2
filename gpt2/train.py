@@ -38,7 +38,7 @@ def train_model(config: dict[str, Any]):
     # logging with wandb
     wandb_run = None
     wandb_config = config['wandb']
-    if config['master_process'] and wandb_config['logging']:
+    if config['is_master'] and wandb_config['logging']:
         wandb_run = wandb.init(
             project=wandb_config['project'],
             name=wandb_config['name'],
@@ -57,7 +57,7 @@ def train_model(config: dict[str, Any]):
     dtype = torch.float32
     autocast_context = nullcontext()
     if config['fp16'] and torch.cuda.is_available():
-        if config['master_process']:
+        if config['is_master']:
             print('Training with fp16 precision')
         dtype = torch.float16
         autocast_context = torch.cuda.amp.autocast(dtype=dtype)
@@ -78,7 +78,7 @@ def train_model(config: dict[str, Any]):
             activation=config['activation'],
         )
     else:
-        if config['master_process']:
+        if config['is_master']:
             print(f'Loading states from checkpoint {preload_checkpoint}')
         saved_states = torch.load(preload_checkpoint, map_location=device)
         required_keys = [
@@ -143,7 +143,7 @@ def train_model(config: dict[str, Any]):
     gradient_accum_step = config['gradient_accum_step']
     model.train()
 
-    if config['master_process']:
+    if config['is_master']:
         num_parameters = sum(param.numel() for param in model.parameters() if param.requires_grad)
         print(f'Model has {num_parameters / 10 ** 6:0.2f}M parameters')
 
@@ -204,35 +204,37 @@ def train_model(config: dict[str, Any]):
             running_loss.update(batch_loss)
             batch_loss = 0.0
 
-            if config['master_process'] and (global_step + 1) % valid_interval == 0:
-                valid_results = eval_model(model, criterion, validation_data, config, valid_steps=valid_steps)
+            if (global_step + 1) % valid_interval == 0:
                 if config['ddp']:
-                    running_loss.reduce(dst=config['rank'])
-                if wandb_run is not None:
-                    wandb_run.log({
-                        'loss/train': running_loss.average,
-                        'loss/valid': valid_results['loss'],
-                    }, step=global_step + 1)
+                    running_loss.reduce(dst=config['master_rank'])
+                if config['is_master']:
+                    valid_results = eval_model(model, criterion, validation_data, config, valid_steps=valid_steps)
+                    if wandb_run is not None:
+                        wandb_run.log({
+                            'loss/train': running_loss.average,
+                            'loss/valid': valid_results['loss'],
+                        }, step=global_step + 1)
                 running_loss.reset()
 
-            if config['master_process'] and (global_step + 1) % save_interval == 0:
+            if (global_step + 1) % save_interval == 0:
                 if config['ddp']:
-                    running_losses = [None for _ in range(config['world_size'])] if config['master_process'] else None
-                    dist.gather_object(vars(running_loss), running_losses, dst=config['rank'])
+                    running_losses = [None for _ in range(config['world_size'])] if config['is_master'] else None
+                    dist.gather_object(vars(running_loss), running_losses, dst=config['master_rank'])
                 else:
                     running_losses = running_loss
-                checkpoint_dict = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'config': vars(gpt_config),
-                    'global_step': global_step + 1,
-                    'running_loss': running_losses,
-                }
-                if scaler.is_enabled():
-                    checkpoint_dict['scaler'] = scaler.state_dict()
-                model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
-                torch.save(checkpoint_dict, model_save_path)
+                if config['is_master']:
+                    checkpoint_dict = {
+                        'model': raw_model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'lr_scheduler': lr_scheduler.state_dict(),
+                        'config': vars(gpt_config),
+                        'global_step': global_step + 1,
+                        'running_loss': running_losses,
+                    }
+                    if scaler.is_enabled():
+                        checkpoint_dict['scaler'] = scaler.state_dict()
+                    model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
+                    torch.save(checkpoint_dict, model_save_path)
 
             global_step += 1
             train_iter.update()
@@ -324,7 +326,7 @@ def eval_model(
             break
 
     if config['ddp']:
-        evaluation_loss.reduce(dst=config['rank'])
+        evaluation_loss.reduce(dst=config['master_rank'])
 
     model.train(is_training)
 
@@ -335,7 +337,8 @@ def eval_model(
 def setup_ddp(config: dict[str, Any]) -> None:
     config['rank'] = int(os.environ.get('RANK', -1))
     config['ddp'] = config['rank'] != -1
-    config['master_process'] = config['rank'] in (-1, 0)
+    config['master_rank'] = 0 if config['ddp'] else -1
+    config['is_master'] = config['rank'] == config['master_rank']
     if config['ddp']:
         config['local_rank'] = int(os.environ['LOCAL_RANK'])
         config['world_size'] = int(os.environ['WORLD_SIZE'])
@@ -350,8 +353,14 @@ def setup_ddp(config: dict[str, Any]) -> None:
         for key in ('train_batch_size', 'eval_batch_size'):
             assert config[key] % config['world_size'] == 0
             config[key] //= config['world_size']
-            if config['master_process']:
-                print(f'{key} per GPU is {config[key]}')
+            if config['is_master']:
+                if key == 'train_batch_size' and config['gradient_accum_step'] > 1:
+                    print(
+                        f'{key} per GPU is {config[key]} '
+                        f'(with gradient accum steps = {config["gradient_accum_step"]})'
+                    )
+                else:
+                    print(f'{key} per GPU is {config[key]}')
 
         # add offset for seed
         config['seed'] += config['rank']
