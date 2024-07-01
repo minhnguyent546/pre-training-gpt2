@@ -207,13 +207,12 @@ def train_model(config: dict[str, Any]):
             if (global_step + 1) % valid_interval == 0:
                 if config['ddp']:
                     running_loss.reduce(dst=config['master_rank'])
-                if config['is_master']:
-                    valid_results = eval_model(model, criterion, validation_data, config, valid_steps=valid_steps)
-                    if wandb_run is not None:
-                        wandb_run.log({
-                            'loss/train': running_loss.average,
-                            'loss/valid': valid_results['loss'],
-                        }, step=global_step + 1)
+                valid_results = eval_model(model, criterion, validation_data, config, valid_steps=valid_steps)
+                if wandb_run is not None:
+                    wandb_run.log({
+                        'loss/train': running_loss.average,
+                        'loss/valid': valid_results['loss'],
+                    }, step=global_step + 1)
                 running_loss.reset()
 
             if (global_step + 1) % save_interval == 0:
