@@ -22,7 +22,7 @@ def train_tokenizer(
     show_progress: bool = True,
 ) -> Tokenizer:
     tokenizer = Tokenizer(tokenizers.models.WordPiece(
-        unk_token='[UNK]',
+        unk_token='<unk>',
         max_input_chars_per_word=100,
     ))  # pyright: ignore[reportCallIssue]
     # pre-tokenizer
@@ -44,7 +44,7 @@ def train_tokenizer(
         vocab_size=vocab_size - 1,
         min_frequency=min_freq,
         show_progress=show_progress,
-        special_tokens=['[UNK]'],
+        special_tokens=['<unk>', '<|endoftext|>'],
         continuing_subword_prefix='##'
     )
     tokenizer.train_from_iterator(data_iter, trainer=trainer)

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
-"""Preprocessing OSCAR dataset and saving as parquet files for pre-training GPT2 model"""
+"""Preprocessing OSCAR dataset and saving as binary files for pre-training GPT2 model"""
 
 import argparse
 import os
 import regex
 import unicodedata
 from typing import Any
+
+import numpy as np
 
 import datasets
 from tokenizers import Tokenizer
@@ -33,9 +35,12 @@ def preprocess_dataset(
             clean_text(text, strip=True, keep_punct=True)
             for text in examples['text']
         ]
+        ids_list = tokenizer.encode_batch(examples['text'])
+        ids_list = [ids.ids + [tokenizer.token_to_id('<|endoftext|>')] for ids in ids_list]
         return {
-            'ids': [tokenizer.encode(item).ids for item in examples['text']],
+            'ids': ids_list,
         }
+
     remove_columns = [] if keep_text else ['text']
     raw_dataset = raw_dataset.map(
         process_examples,
@@ -43,11 +48,18 @@ def preprocess_dataset(
         remove_columns=remove_columns,
         num_proc=num_workers,
     )
-
     for split in raw_dataset:
-        save_path = os.path.join(out_dir, f'{split}.parquet')
+        save_path = os.path.join(out_dir, f'{split}.dat')
         total_tokens = sum(len(item['ids']) for item in raw_dataset[split])
-        raw_dataset[split].to_parquet(save_path)
+        arr = np.memmap(save_path, mode='w+', dtype=np.uint16, shape=(total_tokens,))
+        num_shards = 1024
+        ptr = 0
+        for idx in range(num_shards):
+            shard = raw_dataset[split].shard(num_shards, index=idx, contiguous=True)
+            ids_list = np.concatenate(shard['ids'])
+            arr[ptr:ptr+len(ids_list)] = ids_list
+            ptr += len(ids_list)
+        arr.flush()
         print(f'Saved {split} split contains total {total_tokens} tokens to {save_path}')
 
 def add_opts(parser: argparse.ArgumentParser):

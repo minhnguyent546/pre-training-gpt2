@@ -4,11 +4,8 @@ tokenizer: tokenizer.json
 seed: 1061109567
 
 # datastet
-data_format: parquet
-train_files:
-  - oscar-vi/train.parquet
-validation_files:
-  - oscar-vi/validation.parquet
+train_data: oscar-vi/train.dat # path to the pre-processed data files
+validation_data: oscar-vi/validation.dat
 num_workers: 1 # will be used in load_dataset, DataLoader, etc
 
 # model

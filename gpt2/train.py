@@ -8,7 +8,8 @@ from typing import Dict, Any, Literal
 
 import wandb
 
-import datasets
+import numpy as np
+
 from tokenizers import Tokenizer
 
 import torch
@@ -32,19 +33,11 @@ def train_model(config: dict[str, Any]):
     tokenizer: Tokenizer = Tokenizer.from_file(config['tokenizer'])
     config['vocab_size'] = tokenizer.get_vocab_size()
 
-    # load dataset
-    raw_dataset = datasets.load_dataset(
-        config['data_format'],
-        data_files={
-            'train': config['train_files'],
-            'validation': config['validation_files'],
-        },
-        num_proc=config['num_workers'],
-    )
-
     # datasets, distributed samplers, and data loaders
-    train_dataset = MonolingualDataset(raw_dataset['train'], config['seq_length'], tokenizer)
-    validation_dataset = MonolingualDataset(raw_dataset['validation'], config['seq_length'], tokenizer, random_item=False)
+    train_data = np.memmap(config['train_data'], mode='r', dtype=np.uint16)
+    validation_data = np.memmap(config['validation_data'], mode='r', dtype=np.uint16)
+    train_dataset = MonolingualDataset(train_data, config['seq_length'], tokenizer)
+    validation_dataset = MonolingualDataset(validation_data, config['seq_length'], tokenizer, random_item=False)
     if config['ddp']:
         train_sampler = DistributedSampler(train_dataset, shuffle=True, seed=config['seed'])
         validation_sampler = DistributedSampler(validation_dataset, shuffle=False, seed=config['seed'], drop_last=True)
