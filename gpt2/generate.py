@@ -1,12 +1,12 @@
 import argparse
 
-from torch import Tensor
 import torch
+from torch import Tensor
 
 from tokenizers import Tokenizer
 
-from gpt2.model import GPT, GPTConfig
 import gpt2.utils as utils
+from gpt2.model import GPT, GPTConfig
 
 
 def parse_opts(parser):

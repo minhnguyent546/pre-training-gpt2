@@ -1,10 +1,10 @@
 """Pretraining GPT-2 with language modeling objective."""
 
 import argparse
-from contextlib import nullcontext
 import os
+from contextlib import nullcontext
 from tqdm.autonotebook import tqdm
-from typing import Dict, Any, Literal, Tuple
+from typing import Any, Dict, Literal, Tuple
 
 import wandb
 
@@ -13,13 +13,13 @@ import numpy as np
 from tokenizers import Tokenizer
 
 import torch
-import torch.nn as nn
 import torch.distributed as dist
+import torch.nn as nn
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from gpt2.model import GPT, GPTConfig
 import gpt2.utils as utils
+from gpt2.model import GPT, GPTConfig
 
 
 def train_model(config: dict[str, Any]):

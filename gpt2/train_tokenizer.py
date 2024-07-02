@@ -4,15 +4,16 @@ import argparse
 import multiprocessing as mp
 from functools import partial
 
-from tokenizers import AddedToken, Tokenizer
 import tokenizers
 import tokenizers.decoders
 import tokenizers.models
+import tokenizers.normalizers
 import tokenizers.pre_tokenizers
 import tokenizers.trainers
-import tokenizers.normalizers
+from tokenizers import AddedToken, Tokenizer
 
 import gpt2.utils as utils
+
 
 def train_tokenizer(
     data_iter,

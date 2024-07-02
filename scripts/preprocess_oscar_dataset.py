@@ -30,6 +30,7 @@ def preprocess_dataset(
         },
         num_proc=num_workers,
     )
+
     def process_examples(examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
         examples['text'] = [
             clean_text(text, strip=True, keep_punct=True)

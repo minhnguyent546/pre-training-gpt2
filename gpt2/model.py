@@ -5,14 +5,14 @@ references:
   nanoGPT implementation: https://github.com/karpathy/nanoGPT
 """
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Optional, Union
 
-from torch import Tensor
 import torch
 import torch.nn as nn
 import torch.nn.functional as Fun
+from torch import Tensor
 
 import gpt2.utils as utils
 
@@ -227,7 +227,7 @@ class GPT(nn.Module):
         temperature: float = 1.0,
         top_k: int = 0,
         top_p: float = 1.0,
-        ) -> Tensor:
+    ) -> Tensor:
         # ids has shape (batch_size, seq_length)
         ids = ids.detach().clone()
 
