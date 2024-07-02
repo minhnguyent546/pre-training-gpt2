@@ -16,6 +16,7 @@ num_heads: 12
 d_ff: 3072
 dropout: 0.1
 activation: gelu
+tie_weights: True
 
 # logging with wandb
 wandb:

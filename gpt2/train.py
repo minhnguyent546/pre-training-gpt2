@@ -76,6 +76,7 @@ def train_model(config: dict[str, Any]):
             d_ff=config['d_ff'],
             dropout=config['dropout'],
             activation=config['activation'],
+            tie_weights=config['tie_weights'],
         )
     else:
         if config['is_master']:
