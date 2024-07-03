@@ -66,9 +66,9 @@ def main():
     device = torch.device(device)
 
     checkpoint_state_dict = torch.load(args.model, map_location=device)
-    gpt_config = GPTConfig(**checkpoint_state_dict['gpt_config'])
+    gpt_config = GPTConfig(**checkpoint_state_dict['config'])
     model = GPT(gpt_config, device=device)
-    model.load_state_dict(checkpoint_state_dict['model_state_dict'])
+    model.load_state_dict(checkpoint_state_dict['model'])
     model.to(device)
 
     tokenizer: Tokenizer = Tokenizer.from_file(args.tokenizer)
@@ -87,6 +87,7 @@ def main():
         )
         gen_ids = gen_ids.detach().cpu().numpy()[0]
         gen_sentence = tokenizer.decode(gen_ids, skip_special_tokens=False)
+        gen_sentence = gen_sentence.replace(' <|endoftext|> ', '\n')
         print(gen_sentence)
 
 
