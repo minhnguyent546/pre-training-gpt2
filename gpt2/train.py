@@ -233,6 +233,11 @@ def train_model(config: dict[str, Any]):
                     }
                     if scaler.is_enabled():
                         checkpoint_dict['scaler'] = scaler.state_dict()
+                    utils.ensure_num_saved_checkpoints(
+                        config['checkpoints_dir'],
+                        'gpt2',
+                        config['saved_checkpoint_limit'],
+                    )
                     model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
                     torch.save(checkpoint_dict, model_save_path)
 
@@ -415,7 +420,7 @@ class AverageMeter:
         self.sum = 0.0
         self.count = 0
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return (
             f'{self.name}(value={self.value}, '
             f'average={self.average}, '

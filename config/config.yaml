@@ -41,5 +41,6 @@ train_steps: 40_000
 valid_steps: 2_000
 valid_interval: 3_000
 save_interval: 4_000
+saved_checkpoint_limit: 10
 max_grad_norm: 1.0
 preload_checkpoint: null

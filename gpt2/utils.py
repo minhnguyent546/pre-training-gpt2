@@ -1,3 +1,4 @@
+import glob
 import os
 import random
 import regex
@@ -153,3 +154,17 @@ def normalize_tone(text: str) -> str:
     for orig, repl in tone_normalization_map.items():
         text = text.replace(orig, repl)
     return text
+
+def ensure_num_saved_checkpoints(
+    checkpoints_dir: str,
+    model_basename: str,
+    limit: int,
+) -> None:
+    checkpoints = glob.glob(os.path.join(checkpoints_dir, f'{model_basename}-*.pt'))
+    checkpoints = list(checkpoints)
+    if len(checkpoints) <= limit:
+        return
+
+    checkpoints = sorted(checkpoints, key=lambda x: int(x.split('-')[-1][:-3]))
+    for cp in checkpoints[:-limit]:
+        os.remove(cp)
