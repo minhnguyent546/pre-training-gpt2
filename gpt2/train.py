@@ -156,9 +156,14 @@ def train_model(config: dict[str, Any]):
             range(initial_step, train_steps),
             desc=f'GPU{config["rank"]} - Training model',
             disable=config['local_rank'] != 0,
+            ncols=120,
         )
     else:
-        train_iter = tqdm(range(initial_step, train_steps), desc='Training model')
+        train_iter = tqdm(
+            range(initial_step, train_steps),
+            desc='Training model',
+            ncols=120,
+        )
 
     batch_loss = 0.0
     batch_idx = 0
@@ -212,7 +217,7 @@ def train_model(config: dict[str, Any]):
             running_loss.update(batch_loss)
             train_iter.set_postfix({
                 'loss': f'{batch_loss:0.3f}',
-                'throughput': f'{batch_throughput:0.3f}'
+                'throughput': f'{batch_throughput:0.3f} tokens/s'
             })
             batch_loss = 0.0
             batch_fb_time = 0.0
@@ -318,9 +323,15 @@ def eval_model(
             total=valid_steps,
             desc=f'GPU{config["rank"]} - Evaluating model',
             disable=config['local_rank'] != 0,
+            ncols=120,
         )
     else:
-        valid_iter = tqdm(range(valid_steps), total=valid_steps, desc='Evaluating model')
+        valid_iter = tqdm(
+            range(valid_steps),
+            total=valid_steps,
+            desc='Evaluating model',
+            ncols=120,
+        )
 
     is_training = model.training
     model.eval()
