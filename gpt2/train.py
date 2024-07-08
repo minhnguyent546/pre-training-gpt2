@@ -204,16 +204,20 @@ def train_model(config: dict[str, Any]):
             scaler.step(optimizer)
             scaler.update()
 
-            if wandb_run is not None:
-                for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-                    wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
-                wandb_run.log({'loss/batch_loss': batch_loss}, step=global_step)
-
-            lr_scheduler.step()
-
             batch_throughput = num_tokens_per_batch / batch_fb_time
             if config['ddp']:
                 batch_throughput *= config['world_size']  # estimate throughput when training with multiple gpus
+
+            if wandb_run is not None:
+                for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
+                    wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
+                wandb_run.log({
+                    'loss/batch_loss': batch_loss,
+                    'throughput': batch_throughput,
+                }, step=global_step)
+
+            lr_scheduler.step()
+
             running_loss.update(batch_loss)
             train_iter.set_postfix({
                 'loss': f'{batch_loss:0.3f}',
