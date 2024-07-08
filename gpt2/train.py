@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import time
 from contextlib import nullcontext
 from tqdm.autonotebook import tqdm
 from typing import Any, Dict, Literal, Tuple
@@ -142,6 +143,8 @@ def train_model(config: dict[str, Any]):
     valid_interval = config['valid_interval']
     save_interval = config['save_interval']
     gradient_accum_step = config['gradient_accum_step']
+    num_tokens_per_batch = config['train_batch_size'] * gradient_accum_step * config['seq_length']
+
     model.train()
 
     if config['is_master']:
@@ -151,7 +154,7 @@ def train_model(config: dict[str, Any]):
     if config['ddp']:
         train_iter = tqdm(
             range(initial_step, train_steps),
-            desc=f'Training model on rank {config["rank"]}',
+            desc=f'GPU{config["rank"]} - Training model',
             disable=config['local_rank'] != 0,
         )
     else:
@@ -159,18 +162,19 @@ def train_model(config: dict[str, Any]):
 
     batch_loss = 0.0
     batch_idx = 0
+    batch_fb_time = 0.0  # batch forward + backward time
     global_step = initial_step
+    torch.cuda.empty_cache()
     while global_step < train_steps:
-        torch.cuda.empty_cache()
+        optimizer.zero_grad()
 
+        ts = time.monotonic()
         input_ids, labels = get_batch(
             train_data,
             config['train_batch_size'],
             config['seq_length'],
             device=device,
         )
-
-        optimizer.zero_grad()
 
         if config['ddp']:
             # we only sync gradients at the last step of gradient accumulation
@@ -185,6 +189,7 @@ def train_model(config: dict[str, Any]):
         batch_loss += loss.item()
 
         scaler.scale(loss).backward()
+        batch_fb_time += time.monotonic() - ts
 
         if (batch_idx + 1) % gradient_accum_step == 0:
             if config['max_grad_norm'] > 0:
@@ -201,9 +206,16 @@ def train_model(config: dict[str, Any]):
 
             lr_scheduler.step()
 
-            train_iter.set_postfix({'loss': f'{batch_loss:0.3f}'})
+            batch_throughput = num_tokens_per_batch / batch_fb_time
+            if config['ddp']:
+                batch_throughput *= config['world_size']  # estimate throughput when training with multiple gpus
             running_loss.update(batch_loss)
+            train_iter.set_postfix({
+                'loss': f'{batch_loss:0.3f}',
+                'throughput': f'{batch_throughput:0.3f}'
+            })
             batch_loss = 0.0
+            batch_fb_time = 0.0
 
             if (global_step + 1) % valid_interval == 0:
                 if config['ddp']:
@@ -304,7 +316,7 @@ def eval_model(
         valid_iter = tqdm(
             range(valid_steps),
             total=valid_steps,
-            desc=f'Evaluating model on rank {config["rank"]}',
+            desc=f'GPU{config["rank"]} - Evaluating model',
             disable=config['local_rank'] != 0,
         )
     else:
