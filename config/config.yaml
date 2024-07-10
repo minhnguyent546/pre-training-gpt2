@@ -29,6 +29,7 @@ wandb:
 
 # training
 ddp_backend: nccl # nccl, gloo, etc
+compile: true # whether to compile the model (for faster training)
 optim: adamw # possible values are: adam, adamw
 weight_decay: 1.0e-4
 lr: 0.5

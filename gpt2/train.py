@@ -131,6 +131,12 @@ def train_model(config: dict[str, Any]):
             else:
                 running_loss = AverageMeter(**saved_states['running_loss'])
 
+    # compile the model
+    if config['compile']:
+        if config['is_master']:
+            print('Compiling the model')
+        model = torch.compile(model)
+
     # convert the model to distributed data parallel
     raw_model = model
     if config['ddp']:
