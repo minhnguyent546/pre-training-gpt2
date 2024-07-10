@@ -194,6 +194,8 @@ def train_model(config: dict[str, Any]):
         batch_loss += loss.item()
 
         scaler.scale(loss).backward()
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
         batch_fb_time += time.monotonic() - ts
 
         if (batch_idx + 1) % gradient_accum_step == 0:
