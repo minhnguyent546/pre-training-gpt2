@@ -191,7 +191,7 @@ def train_model(config: dict[str, Any]):
 
         if gradient_accum_step > 1:
             loss /= gradient_accum_step
-        batch_loss += loss.item()
+        batch_loss += loss.detach()
 
         scaler.scale(loss).backward()
         if device.type == 'cuda':
@@ -353,8 +353,8 @@ def eval_model(
         # TODO: consider using fp16 for evaluation
         logits = model(input_ids)
         loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
-        evaluation_loss.update(loss.item())
-        valid_iter.set_postfix({'loss': f'{loss.item():0.3f}'})
+        evaluation_loss.update(loss)
+        valid_iter.set_postfix({'loss': f'{loss:0.3f}'})
 
         if batch_idx + 1 >= valid_steps:
             break
