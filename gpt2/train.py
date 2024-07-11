@@ -24,6 +24,10 @@ from gpt2.model import GPT, GPTConfig
 
 def train_model(config: dict[str, Any]):
     utils.set_seed(config['seed'])
+    matmul_precision = config.get('matmul_precision', 'highest')
+    torch.set_float32_matmul_precision(matmul_precision)
+    if config['is_master']:
+        print(f'Set float32 matmul precision to {matmul_precision}')
 
     checkpoints_dir = utils.ensure_dir(config['checkpoints_dir'])
 

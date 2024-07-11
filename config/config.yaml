@@ -30,6 +30,7 @@ wandb:
 # training
 ddp_backend: nccl # nccl, gloo, etc
 compile: true # whether to compile the model (for faster training)
+matmul_precision: highest # see: https://pytorch.org/docs/2.3/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
 optim:
   type: adamw # possible values are: adam, adamw
   lr: 0.5
