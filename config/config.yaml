@@ -37,7 +37,7 @@ warmup_steps: 4_000
 train_batch_size: 32
 eval_batch_size: 16
 gradient_accum_step: 1
-fp16: false
+mixed_precision: false # false, fp16, bf16
 train_steps: 40_000
 valid_steps: 2_000
 valid_interval: 3_000

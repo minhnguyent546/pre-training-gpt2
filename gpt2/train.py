@@ -3,7 +3,6 @@
 import argparse
 import os
 import time
-from contextlib import nullcontext
 from tqdm.autonotebook import tqdm
 from typing import Any, Dict, Literal, Tuple
 
@@ -54,15 +53,23 @@ def train_model(config: dict[str, Any]):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    # mixed precision training with fp16
-    dtype = torch.float32
-    autocast_context = nullcontext()
-    if config['fp16'] and torch.cuda.is_available():
+    # mixed precision training
+    mp_dtype = torch.float32
+    if device.type == 'cuda' and config['mixed_precision'] == 'fp16':
+        mp_dtype = torch.float16
         if config['is_master']:
-            print('Training with fp16 precision')
-        dtype = torch.float16
-        autocast_context = torch.cuda.amp.autocast(dtype=dtype)
-    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == torch.float16))
+            print('Mixed precision training is enabled with fp16')
+    elif device.type == 'cuda' and config['mixed_precision'] == 'bf16':
+        if torch.cuda.is_bf16_supported():
+            mp_dtype = torch.bfloat16
+            if config['is_master']:
+                print('Mixed precision training is enabled with bf16')
+        else:
+            mp_dtype = torch.float16
+            if config['is_master']:
+                print('bf16 is not supported on your hardware, fallback to mixed precision training with fp16')
+    autocast_context = torch.cuda.amp.autocast(enabled=(mp_dtype in (torch.float16, torch.bfloat16)), dtype=mp_dtype)
+    scaler = torch.cuda.amp.GradScaler(enabled=(mp_dtype == torch.float16))
 
     # resume from previous checkpoint
     preload_checkpoint = config['preload_checkpoint']
