@@ -120,14 +120,25 @@ def train_model(config: dict[str, Any]):
         weight_decay=config['optim']['weight_decay'],
         device=device,
     )
-    lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=lambda step: learning_rate * utils.noam_decay(
-            step,
-            config['d_model'],
-            config['warmup_steps']
-        ),
-    )
+    if config['scheduler']['decay_method'] == 'noam':
+        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lr_lambda=lambda step: utils.noam_decay(
+                step, learning_rate, config['d_model'],
+                config['scheduler']['warmup_steps'],
+            ),
+        )
+    elif config['scheduler']['decay_method'] == 'cosine':
+        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lr_lambda=lambda step: utils.cosine_decay(
+                step, learning_rate, config['scheduler']['min_lr'],
+                config['scheduler']['warmup_steps'],
+                config['scheduler']['decay_steps'],
+            ),
+        )
+    else:
+        raise ValueError(f'Unsupported scheduler decay method: {config["scheduler"]["decay_method"]}')
 
     initial_step = 0
     running_loss = AverageMeter('running_loss', device=device)

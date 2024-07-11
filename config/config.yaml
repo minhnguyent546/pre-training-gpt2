@@ -33,13 +33,17 @@ compile: true # whether to compile the model (for faster training)
 matmul_precision: highest # see: https://pytorch.org/docs/2.3/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
 optim:
   type: adamw # possible values are: adam, adamw
-  lr: 0.5
+  lr: 6.0e-4 # lr should be large when using noam decay (e.g. 0.5)
   betas:
     - 0.9
     - 0.999
   eps: 1.0e-8
   weight_decay: 1.0e-4
-warmup_steps: 4_000
+scheduler:
+  decay_method: cosine # cosine, noam
+  warmup_steps: 4_000
+  min_lr: 6.0e-5 # used in cosine decay
+  decay_steps: 40_000 # used in cosine decay
 train_batch_size: 32
 eval_batch_size: 16
 gradient_accum_step: 1
