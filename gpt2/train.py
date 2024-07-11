@@ -124,7 +124,7 @@ def train_model(config: dict[str, Any]):
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: utils.noam_decay(
-                step, learning_rate, config['d_model'],
+                step, config['d_model'],
                 config['scheduler']['warmup_steps'],
             ),
         )
@@ -134,7 +134,7 @@ def train_model(config: dict[str, Any]):
             lr_lambda=lambda step: utils.cosine_decay(
                 step, learning_rate, config['scheduler']['min_lr'],
                 config['scheduler']['warmup_steps'],
-                config['scheduler']['decay_steps'],
+                config['scheduler']['decay_steps'], factor=1/learning_rate,
             ),
         )
     else:
