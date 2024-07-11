@@ -39,7 +39,15 @@ def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
-def make_optimizer(model, optim_type: str, lr: float, weight_decay: float = 0.0) -> torch.optim.Optimizer:
+def make_optimizer(
+    model,
+    optim_type: str,
+    lr: float,
+    betas: tuple[float, float] = (0.9, 0.999),
+    eps: float = 1e-8,
+    weight_decay: float = 0.0,
+    device: torch.device | None = None,
+) -> torch.optim.Optimizer:
     param_list = [param for param in model.parameters() if param.requires_grad]
     decay_params = [param for param in param_list if param.dim() >= 2]
     no_decay_params = [param for param in param_list if param.dim() < 2]
@@ -48,10 +56,11 @@ def make_optimizer(model, optim_type: str, lr: float, weight_decay: float = 0.0)
         {'params': no_decay_params, 'weight_decay': 0.0},
     ]
     optim_type = optim_type.lower()
+    use_fused_impl = device is not None and device.type == 'cuda'
     if optim_type == 'adam':
-        optimizer = torch.optim.Adam(param_groups, lr)
+        optimizer = torch.optim.Adam(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
     elif optim_type == 'adamw':
-        optimizer = torch.optim.AdamW(param_groups, lr)
+        optimizer = torch.optim.AdamW(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
     else:
         raise ValueError(f'Unsupported optimizer type: {optim_type}. Possible values are: adam, adamw')
 

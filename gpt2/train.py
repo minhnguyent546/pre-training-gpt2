@@ -106,12 +106,15 @@ def train_model(config: dict[str, Any]):
     model = GPT(gpt_config)
     model.to(device)
     criterion = nn.CrossEntropyLoss()
-    learning_rate = config['lr']
+    learning_rate = config['optim']['lr']
     optimizer = utils.make_optimizer(
         model,
-        config['optim'],
+        config['optim']['type'],
         lr=learning_rate,
-        weight_decay=config['weight_decay']
+        betas=config['optim']['betas'],
+        eps=config['optim']['eps'],
+        weight_decay=config['optim']['weight_decay'],
+        device=device,
     )
     lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
