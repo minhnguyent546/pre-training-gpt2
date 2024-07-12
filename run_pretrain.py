@@ -1,4 +1,4 @@
-from gpt2.train import main
+from gpt2.run_pretrain import main
 
 
 if __name__ == '__main__':
