@@ -4,3 +4,4 @@ regex==2024.5.15
 tokenizers==0.19.1
 torch==2.3.1
 tqdm==4.66.2
+datasets==2.20.0

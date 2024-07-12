@@ -1,9 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/pyright/main/packages/vscode-pyright/schemas/pyrightconfig.schema.json",
+  "pythonVerson": "3.10",
   "include": [
     "gpt2",
     "scripts"
   ],
+
   "typeCheckingMode": "strict",
 
   // disable some settings for incomplete stubs
