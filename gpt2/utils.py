@@ -1,4 +1,5 @@
 import glob
+import math
 import os
 import random
 import regex
@@ -28,18 +29,46 @@ def chunks(data: list[Any] | str, chunk_size: int = 1_000):
     for i in range(0, len(data), chunk_size):
         yield data[i:i+chunk_size]
 
-def noam_decay(step_num: int, d_model: int = 768, warmup_steps: int = 4000):
-    """
-    As described in https://arxiv.org/pdf/1706.03762.pdf
-    """
+def noam_decay(step_num: int, d_model: int, warmup_steps: int, factor: float = 1.0) -> float:
+    """As described in https://arxiv.org/pdf/1706.03762.pdf."""
     step_num = max(step_num, 1)
-    return d_model ** (-0.5) * min(step_num ** (-0.5), step_num * warmup_steps ** (-1.5))
+    return factor * d_model ** (-0.5) * min(step_num ** (-0.5), step_num * warmup_steps ** (-1.5))
+
+def cosine_decay(
+    step_num: int,
+    lr: float,
+    min_lr: float,
+    warmup_steps: int,
+    decay_steps: int,
+    factor: float = 1.0,
+) -> float:
+    """Cosine decay with warmup."""
+    step_num = max(step_num, 1)
+    decayed_lr = None
+    if step_num <= warmup_steps:
+        decayed_lr = lr * step_num / warmup_steps
+    elif step_num > decay_steps:
+        decayed_lr = min_lr
+    else:
+        decay_ratio = (step_num - warmup_steps) / (decay_steps - warmup_steps)
+        assert 0 <= decay_ratio and decay_ratio <= 1
+        coeff = 0.5 * (1 + math.cos(math.pi * decay_ratio))
+        decayed_lr = min_lr + (lr - min_lr) * coeff
+    return factor * decayed_lr
 
 def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
-def make_optimizer(model, optim_type: str, lr: float, weight_decay: float = 0.0) -> torch.optim.Optimizer:
+def make_optimizer(
+    model,
+    optim_type: str,
+    lr: float,
+    betas: tuple[float, float] = (0.9, 0.999),
+    eps: float = 1e-8,
+    weight_decay: float = 0.0,
+    device: torch.device | None = None,
+) -> torch.optim.Optimizer:
     param_list = [param for param in model.parameters() if param.requires_grad]
     decay_params = [param for param in param_list if param.dim() >= 2]
     no_decay_params = [param for param in param_list if param.dim() < 2]
@@ -48,10 +77,11 @@ def make_optimizer(model, optim_type: str, lr: float, weight_decay: float = 0.0)
         {'params': no_decay_params, 'weight_decay': 0.0},
     ]
     optim_type = optim_type.lower()
+    use_fused_impl = device is not None and device.type == 'cuda'
     if optim_type == 'adam':
-        optimizer = torch.optim.Adam(param_groups, lr)
+        optimizer = torch.optim.Adam(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
     elif optim_type == 'adamw':
-        optimizer = torch.optim.AdamW(param_groups, lr)
+        optimizer = torch.optim.AdamW(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
     else:
         raise ValueError(f'Unsupported optimizer type: {optim_type}. Possible values are: adam, adamw')
 

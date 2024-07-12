@@ -3,7 +3,6 @@
 import argparse
 import os
 import time
-from contextlib import nullcontext
 from tqdm.autonotebook import tqdm
 from typing import Any, Dict, Literal, Tuple
 
@@ -25,6 +24,10 @@ from gpt2.model import GPT, GPTConfig
 
 def train_model(config: dict[str, Any]):
     utils.set_seed(config['seed'])
+    matmul_precision = config.get('matmul_precision', 'highest')
+    torch.set_float32_matmul_precision(matmul_precision)
+    if config['is_master']:
+        print(f'Set float32 matmul precision to {matmul_precision}')
 
     checkpoints_dir = utils.ensure_dir(config['checkpoints_dir'])
 
@@ -54,15 +57,23 @@ def train_model(config: dict[str, Any]):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    # mixed precision training with fp16
-    dtype = torch.float32
-    autocast_context = nullcontext()
-    if config['fp16'] and torch.cuda.is_available():
+    # mixed precision training
+    mp_dtype = torch.float32
+    if device.type == 'cuda' and config['mixed_precision'] == 'fp16':
+        mp_dtype = torch.float16
         if config['is_master']:
-            print('Training with fp16 precision')
-        dtype = torch.float16
-        autocast_context = torch.cuda.amp.autocast(dtype=dtype)
-    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == torch.float16))
+            print('Mixed precision training is enabled with fp16')
+    elif device.type == 'cuda' and config['mixed_precision'] == 'bf16':
+        if torch.cuda.is_bf16_supported():
+            mp_dtype = torch.bfloat16
+            if config['is_master']:
+                print('Mixed precision training is enabled with bf16')
+        else:
+            mp_dtype = torch.float16
+            if config['is_master']:
+                print('bf16 is not supported on your hardware, fallback to mixed precision training with fp16')
+    autocast_context = torch.cuda.amp.autocast(enabled=(mp_dtype in (torch.float16, torch.bfloat16)), dtype=mp_dtype)
+    scaler = torch.cuda.amp.GradScaler(enabled=(mp_dtype == torch.float16))
 
     # resume from previous checkpoint
     preload_checkpoint = config['preload_checkpoint']
@@ -99,21 +110,35 @@ def train_model(config: dict[str, Any]):
     model = GPT(gpt_config)
     model.to(device)
     criterion = nn.CrossEntropyLoss()
-    learning_rate = config['lr']
+    learning_rate = config['optim']['lr']
     optimizer = utils.make_optimizer(
         model,
-        config['optim'],
+        config['optim']['type'],
         lr=learning_rate,
-        weight_decay=config['weight_decay']
+        betas=config['optim']['betas'],
+        eps=config['optim']['eps'],
+        weight_decay=config['optim']['weight_decay'],
+        device=device,
     )
-    lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lr_lambda=lambda step: learning_rate * utils.noam_decay(
-            step,
-            config['d_model'],
-            config['warmup_steps']
-        ),
-    )
+    if config['scheduler']['decay_method'] == 'noam':
+        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lr_lambda=lambda step: utils.noam_decay(
+                step, config['d_model'],
+                config['scheduler']['warmup_steps'],
+            ),
+        )
+    elif config['scheduler']['decay_method'] == 'cosine':
+        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lr_lambda=lambda step: utils.cosine_decay(
+                step, learning_rate, config['scheduler']['min_lr'],
+                config['scheduler']['warmup_steps'],
+                config['scheduler']['decay_steps'], factor=1/learning_rate,
+            ),
+        )
+    else:
+        raise ValueError(f'Unsupported scheduler decay method: {config["scheduler"]["decay_method"]}')
 
     initial_step = 0
     running_loss = AverageMeter('running_loss', device=device)
@@ -130,6 +155,12 @@ def train_model(config: dict[str, Any]):
                 running_loss = AverageMeter(**saved_states['running_loss'][config['rank']])
             else:
                 running_loss = AverageMeter(**saved_states['running_loss'])
+
+    # compile the model
+    if config['compile']:
+        if config['is_master']:
+            print('Compiling the model')
+        model = torch.compile(model)
 
     # convert the model to distributed data parallel
     raw_model = model
@@ -191,7 +222,7 @@ def train_model(config: dict[str, Any]):
 
         if gradient_accum_step > 1:
             loss /= gradient_accum_step
-        batch_loss += loss.item()
+        batch_loss += loss.detach()
 
         scaler.scale(loss).backward()
         if device.type == 'cuda':
@@ -353,8 +384,8 @@ def eval_model(
         # TODO: consider using fp16 for evaluation
         logits = model(input_ids)
         loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
-        evaluation_loss.update(loss.item())
-        valid_iter.set_postfix({'loss': f'{loss.item():0.3f}'})
+        evaluation_loss.update(loss)
+        valid_iter.set_postfix({'loss': f'{loss:0.3f}'})
 
         if batch_idx + 1 >= valid_steps:
             break
