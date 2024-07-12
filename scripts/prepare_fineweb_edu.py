@@ -42,17 +42,17 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
     def tokenize_examples(examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
         tokens_list = tokenizer.encode_ordinary_batch(examples['text'], num_threads=num_workers)
         tokens_list = [tokens + [eot_id] for tokens in tokens_list]
-        lengths = [len(tokens) for tokens in tokens_list]
+        # lengths = [len(tokens) for tokens in tokens_list]
         return {
             'tokens': tokens_list,
-            'length': lengths,
+            # 'length': lengths,
         }
 
     ds = ds.shuffle(seed=args.seed)
     ds = ds.map(tokenize_examples, batched=True, num_proc=num_workers, remove_columns=['text'])
     train_ds = ds['train']
-    total_tokens = sum(train_ds['length'])
-    print('Total tokens:', total_tokens)
+    # total_tokens = sum(train_ds['length'])
+    # print('Total tokens:', total_tokens)
 
     shard_size = args.shard_size
     shard_idx = 0
