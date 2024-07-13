@@ -177,7 +177,7 @@ class GPT(nn.Module):
     def forward(self, ids: Tensor) -> Tensor:
         batch_size, seq_length = ids.size()
         token_embeddings = self.token_embedding(ids)
-        pos = torch.arange(0, seq_length, dtype=torch.int32, device=self.device)
+        pos = torch.arange(0, seq_length, dtype=torch.int64, device=self.device)
         pos_embeddings = self.positional_embedding(pos)
         x = self.dropout(token_embeddings + pos_embeddings)
         x = self.decoder_blocks(x)

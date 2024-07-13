@@ -212,8 +212,8 @@ def train_model(config: dict[str, Any]):
 
         ts = time.monotonic()
         input_ids, labels = train_dataset.next_batch()
-        input_ids = input_ids.to(device)
-        labels = labels.to(device).to(torch.int64)
+        input_ids = input_ids.type(torch.int64).to(device)
+        labels = labels.type(torch.int64).to(device)
 
         if config['ddp']:
             # we only sync gradients at the last step of gradient accumulation
@@ -364,7 +364,7 @@ def eval_model(
 
     for batch_idx in valid_iter:
         input_ids, labels = eval_dataset.next_batch()
-        input_ids = input_ids.to(device)
+        input_ids = input_ids.type(torch.int64).to(device)
         labels = labels.type(torch.int64).to(device)
 
         with autocast_context:
