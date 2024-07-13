@@ -244,6 +244,7 @@ def train_model(config: dict[str, Any]):
 
             scaler.step(optimizer)
             scaler.update()
+            xm.mark_step()
 
             batch_throughput = num_tokens_per_batch / batch_fb_time
             if config['ddp']:
