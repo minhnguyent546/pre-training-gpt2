@@ -163,6 +163,7 @@ def train_model(config: dict[str, Any]):
             else:
                 running_loss = AverageMeter(**saved_states['running_loss'])
 
+    raw_model = model
     # compile the model
     if config['compile']:
         if config['is_master']:
@@ -170,10 +171,8 @@ def train_model(config: dict[str, Any]):
         model = torch.compile(model)
 
     # convert the model to distributed data parallel
-    raw_model = model
     if config['ddp']:
         model = DDP(model, device_ids=[config['local_rank']], output_device=config['local_rank'])
-        raw_model = model.module
 
     # training loop
     train_steps = config['train_steps']
@@ -366,7 +365,7 @@ def eval_model(
     for batch_idx in valid_iter:
         input_ids, labels = eval_dataset.next_batch()
         input_ids = input_ids.to(device)
-        labels = labels.to(device).to(torch.int64)
+        labels = labels.type(torch.int64).to(device)
 
         with autocast_context:
             logits = model(input_ids)
