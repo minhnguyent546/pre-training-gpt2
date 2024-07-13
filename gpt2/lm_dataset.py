@@ -1,5 +1,6 @@
 import glob
 import os
+import random
 
 import numpy as np
 import torch
@@ -25,10 +26,14 @@ class LMDataset(Dataset):
         shard_files = glob.glob(os.path.join(dataset_dir, '*.npy'))
         if len(shard_files) == 0:
             raise ValueError(f'Could not find any .npy file in {dataset_dir}')
-        self.shard_files = sorted(shard_files)
+        if shuffle:
+            random.shuffle(shard_files)
+        else:
+            shard_files = sorted(shard_files)
+        self.shard_files = shard_files
+
         self.batch_size = batch_size
         self.seq_length = seq_length
-        self.shuffle = shuffle
         self.num_replicas = num_replicas
         self.rank = rank
 
@@ -68,8 +73,6 @@ class LMDataset(Dataset):
     def _load_next_shard(self) -> None:
         self.shard_idx = (self.shard_idx + 1) % len(self.shard_files)
         self.shard = np.load(self.shard_files[self.shard_idx])
-        if self.shuffle:
-            np.random.shuffle(self.shard)
 
     def _normalize_ptr(self) -> None:
         """self.ptr may exceed the length of the shard, so we need to take care of that."""
