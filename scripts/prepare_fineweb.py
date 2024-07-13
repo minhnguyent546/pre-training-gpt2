@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Download and tokenize the fineweb-edu dataset (10BT subset) (https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)
+Download and tokenize the fineweb dataset (10BT subset) (https://huggingface.co/datasets/HuggingFaceFW/fineweb)
 for pre-training GPT2. Adapted from https://github.com/karpathy/build-nanogpt.
 
 This script will need approximately 80GiB space on disk to download and process
@@ -39,7 +39,7 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
     num_workers = args.num_workers
 
     ds = datasets.load_dataset(
-        'HuggingFaceFW/fineweb-edu',
+        'HuggingFaceFW/fineweb-edu' if args.fineweb_edu else 'HuggingFaceFW/fineweb',
         'sample-10BT',
         num_proc=num_workers,
         trust_remote_code=True,
@@ -112,6 +112,11 @@ def add_opts(parser: argparse.ArgumentParser) -> None:
         help='Seed for random number generator',
         type=int,
         default=1061109567,
+    )
+    parser.add_argument(
+        '--fineweb-edu',
+        help='Whether to use the edu version of fineweb dataset (fineweb-edu)',
+        action='store_true',
     )
     parser.add_argument(
         '--tokenizer',
