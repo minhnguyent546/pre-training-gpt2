@@ -65,8 +65,9 @@ def train_model(config: dict[str, Any]):
         )
 
     # training device
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    device = torch.device(device)
+    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # device = torch.device(device)
+    device = xm.xla_device()
 
     # mixed precision training
     mp_dtype = torch.float32
