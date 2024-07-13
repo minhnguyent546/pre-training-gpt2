@@ -119,7 +119,7 @@ def train_model(config: dict[str, Any]):
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         gpt_config = GPTConfig(**saved_states['config'])
 
-    model = GPT(gpt_config)
+    model = GPT(gpt_config, device=device)
     model.to(device)
     criterion = nn.CrossEntropyLoss()
     learning_rate = config['optim']['lr']
