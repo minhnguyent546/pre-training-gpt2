@@ -3,22 +3,19 @@
 import argparse
 import os
 import time
+from contextlib import nullcontext
 from tqdm.autonotebook import tqdm
-from typing import Any, Dict, Literal, Tuple
+from typing import Any, Literal
 
 import wandb
-
-import numpy as np
-
-from tokenizers import Tokenizer
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import gpt2.utils as utils
+from gpt2.lm_dataset import LMDataset
 from gpt2.model import GPT, GPTConfig
 
 
@@ -31,13 +28,23 @@ def train_model(config: dict[str, Any]):
 
     checkpoints_dir = utils.ensure_dir(config['checkpoints_dir'])
 
-    # load trained tokenizer
-    tokenizer: Tokenizer = Tokenizer.from_file(config['tokenizer'])
-    config['vocab_size'] = tokenizer.get_vocab_size()
-
-    # train and validation data
-    train_data = np.memmap(config['train_data'], mode='r', dtype=np.uint16)
-    validation_data = np.memmap(config['validation_data'], mode='r', dtype=np.uint16)
+    # dataset
+    train_dataset = LMDataset(
+        config['train_dir'],
+        config['train_batch_size'],
+        config['seq_length'],
+        shuffle=True,
+        num_replicas=config['world_size'] if config['ddp'] else None,
+        rank=config['rank'] if config['ddp'] else None,
+    )
+    validation_dataset = LMDataset(
+        config['valid_dir'],
+        config['eval_batch_size'],
+        config['seq_length'],
+        shuffle=False,
+        num_replicas=config['world_size'] if config['ddp'] else None,
+        rank=config['rank'] if config['ddp'] else None,
+    )
 
     # logging with wandb
     wandb_run = None
@@ -205,12 +212,9 @@ def train_model(config: dict[str, Any]):
         optimizer.zero_grad()
 
         ts = time.monotonic()
-        input_ids, labels = get_batch(
-            train_data,
-            config['train_batch_size'],
-            config['seq_length'],
-            device=device,
-        )
+        input_ids, labels = train_dataset.next_batch()
+        input_ids = input_ids.to(device)
+        labels = labels.to(device).to(torch.int64)
 
         if config['ddp']:
             # we only sync gradients at the last step of gradient accumulation
@@ -262,7 +266,14 @@ def train_model(config: dict[str, Any]):
             if (global_step + 1) % valid_interval == 0:
                 if config['ddp']:
                     running_loss.reduce(dst=config['master_rank'])
-                valid_results = eval_model(model, criterion, validation_data, config, valid_steps=valid_steps)
+                valid_results = eval_model(
+                    model,
+                    criterion,
+                    validation_dataset,
+                    valid_steps,
+                    config,
+                    autocast_context,
+                )
                 if wandb_run is not None:
                     wandb_run.log({
                         'loss/train': running_loss.average,
@@ -321,38 +332,17 @@ def main():
     if config['ddp']:
         dist.destroy_process_group()
 
-def get_batch(
-    data_ids,
-    batch_size: int,
-    seq_length: int,
-    device: torch.device | None = None,
-) -> Tuple[Tensor, Tensor]:
-    indices = torch.randint(high=len(data_ids) - seq_length, size=(batch_size,))
-    input_ids = torch.stack([torch.from_numpy(data_ids[idx:idx+seq_length].copy().astype(np.int32)) for idx in indices])
-    labels = torch.stack([torch.from_numpy(data_ids[idx+1:idx+1+seq_length].copy().astype(np.int64)) for idx in indices])
-    if device is not None:
-        input_ids = input_ids.to(device)
-        labels = labels.to(device)
-    return input_ids, labels
-
 @torch.no_grad()
 def eval_model(
     model: GPT | DDP,
     criterion,
-    eval_data,
+    eval_dataset: LMDataset,
+    valid_steps: int,
     config: dict[str, Any],
-    valid_steps: int | None = None,
-) -> Dict[str, float]:
+    autocast_context=nullcontext,
+) -> dict[str, float]:
     device = model.device
     evaluation_loss = AverageMeter('evaluation_loss', device=device)
-
-    if valid_steps is None:  # actually `valid_steps` should be provided
-        valid_steps = len(eval_data)
-    else:
-        if config['ddp']:
-            assert valid_steps % config['world_size'] == 0, \
-                f'`valid_steps` must be divisible by `world_size` ({config["world_size"]})'
-            valid_steps //= config['world_size']
 
     if config['ddp']:
         valid_iter = tqdm(
@@ -374,16 +364,14 @@ def eval_model(
     model.eval()
 
     for batch_idx in valid_iter:
-        input_ids, labels = get_batch(
-            eval_data,
-            config['train_batch_size'],
-            config['seq_length'],
-            device=device,
-        )
+        input_ids, labels = eval_dataset.next_batch()
+        input_ids = input_ids.to(device)
+        labels = labels.to(device).to(torch.int64)
 
-        # TODO: consider using fp16 for evaluation
-        logits = model(input_ids)
-        loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
+        with autocast_context:
+            logits = model(input_ids)
+            loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
+
         evaluation_loss.update(loss)
         valid_iter.set_postfix({'loss': f'{loss:0.3f}'})
 
@@ -426,9 +414,6 @@ def setup_ddp(config: dict[str, Any]) -> None:
                     )
                 else:
                     print(f'{key} per GPU is {config[key]}')
-
-        # add offset for seed
-        config['seed'] += config['rank']
 
 class AverageMeter:
     """A class for working with average meters."""
