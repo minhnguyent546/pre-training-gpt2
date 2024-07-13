@@ -45,8 +45,6 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
         trust_remote_code=True,
         cache_dir=args.cache_dir,
     )
-
-    ds = ds.shuffle(seed=args.seed)
     train_ds = ds['train']
 
     shard_size = args.shard_size
@@ -57,7 +55,7 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
     print(f'Approximately {num_approx_shards} shards will be created with size {shard_size} tokens each')
     progress_bar = tqdm(desc=f'Processing shard {shard_idx}', total=shard_size, unit=' tokens')
     with mp.Pool(num_workers) as pool:
-        for item in pool.imap(partial(tokenize_example, tokenizer=tokenizer), train_ds, chunksize=32):
+        for item in pool.imap(partial(tokenize_example, tokenizer=tokenizer), train_ds, chunksize=128):
             tokens = item['tokens']
             cur_num_tokens = len(tokens)
             if cur_num_tokens + token_count > shard_size:
