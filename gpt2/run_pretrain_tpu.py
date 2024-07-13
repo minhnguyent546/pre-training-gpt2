@@ -38,16 +38,16 @@ def train_model(config: dict[str, Any]):
         config['train_batch_size'],
         config['seq_length'],
         shuffle=True,
-        num_replicas=config['world_size'] if config['ddp'] else None,
-        rank=config['rank'] if config['ddp'] else None,
+        num_replicas=config['world_size'] if config['ddp'] else 1,
+        rank=config['rank'] if config['ddp'] else 0,
     )
     validation_dataset = LMDataset(
         config['valid_dir'],
         config['eval_batch_size'],
         config['seq_length'],
         shuffle=False,
-        num_replicas=config['world_size'] if config['ddp'] else None,
-        rank=config['rank'] if config['ddp'] else None,
+        num_replicas=config['world_size'] if config['ddp'] else 1,
+        rank=config['rank'] if config['ddp'] else 0,
     )
 
     # logging with wandb
