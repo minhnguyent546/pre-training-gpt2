@@ -121,6 +121,9 @@ def train_model(config: dict[str, Any]):
 
     model = GPT(gpt_config, device=device)
     model.to(device)
+    # tie_weights must be called after moving to device if we are on XLA device,
+    # otherwise it will be treated as separate Tensors
+    model.tie_weights()
     criterion = nn.CrossEntropyLoss()
     learning_rate = config['optim']['lr']
     optimizer = utils.make_optimizer(

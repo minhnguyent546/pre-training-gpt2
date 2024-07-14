@@ -187,10 +187,10 @@ class GPT(nn.Module):
 
     def post_init(self) -> None:
         self._init_model_weights()
-        if self._use_tied_weights:
-            self._tie_weights()
 
-    def _tie_weights(self) -> None:
+    def tie_weights(self) -> None:
+        if not self._use_tied_weights:
+            return
         if self.last_linear.weight.shape != self.token_embedding.weight.shape:
             raise ValueError(
                 'When using tied weights, the weight of the last linear layer '
