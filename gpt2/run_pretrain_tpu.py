@@ -173,7 +173,7 @@ def train_model(config: dict[str, Any]):
     if config['compile']:
         if config['is_master']:
             print('Compiling the model')
-        model = torch.compile(model)
+        model = torch.compile(model, backend='openxla' if device.type == 'xla' else 'inductor')
 
     # convert the model to distributed data parallel
     if config['ddp']:
