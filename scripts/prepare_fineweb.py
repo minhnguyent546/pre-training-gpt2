@@ -41,11 +41,12 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
     ds = datasets.load_dataset(
         'HuggingFaceFW/fineweb-edu' if args.fineweb_edu else 'HuggingFaceFW/fineweb',
         'sample-10BT',
-        num_proc=num_workers,
+        num_proc=None if args.streaming else args.num_workers,
         trust_remote_code=True,
         cache_dir=args.cache_dir,
+        streaming=args.streaming,
+        split='train',
     )
-    train_ds = ds['train']
 
     shard_size = args.shard_size
     shard_idx = 0
@@ -55,7 +56,7 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
     print(f'Approximately {num_approx_shards} shards will be created with size {shard_size} tokens each')
     progress_bar = tqdm(desc=f'Processing shard {shard_idx}', total=shard_size, unit=' tokens')
     with mp.Pool(num_workers) as pool:
-        for item in pool.imap(partial(tokenize_example, tokenizer=tokenizer), train_ds, chunksize=128):
+        for item in pool.imap(partial(tokenize_example, tokenizer=tokenizer), ds, chunksize=128):
             tokens = item['tokens']
             cur_num_tokens = len(tokens)
             if cur_num_tokens + token_count > shard_size:
@@ -114,6 +115,11 @@ def add_opts(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         '--fineweb-edu',
         help='Whether to use the edu version of fineweb dataset (fineweb-edu)',
+        action='store_true',
+    )
+    parser.add_argument(
+        '--streaming',
+        help='Stream the dataset instead of downloading',
         action='store_true',
     )
     parser.add_argument(
