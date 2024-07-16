@@ -54,6 +54,7 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
     arr = np.full((shard_size,), dump_id, dtype=np.uint16)
     num_approx_shards = 10 * 10**9 // shard_size
     print(f'Approximately {num_approx_shards} shards will be created with size {shard_size} tokens each')
+    shard_file_basename = 'fineweb_edu' if args.fineweb_edu else 'fineweb'
     progress_bar = tqdm(desc=f'Processing shard {shard_idx}', total=shard_size, unit=' tokens')
     with mp.Pool(num_workers) as pool:
         for item in pool.imap(partial(tokenize_example, tokenizer=tokenizer), ds, chunksize=128):
@@ -65,7 +66,7 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
                 num_remain_tokens = cur_num_tokens - (shard_size - token_count)
 
                 # save to .npy file
-                file_path = os.path.join(output_dir, f'fineweb_edu_{shard_idx:04d}.npy')
+                file_path = os.path.join(output_dir, f'{shard_file_basename}_{shard_idx:04d}.npy')
                 np.save(file_path, arr)
                 progress_bar.write(f'Saved shard {shard_idx} to {file_path}')
                 progress_bar = None
@@ -84,7 +85,7 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
                 progress_bar.update(cur_num_tokens)
 
         if token_count > 1:
-            file_path = os.path.join(output_dir, f'fineweb_edu_{shard_idx:04d}.npy')
+            file_path = os.path.join(output_dir, f'{shard_file_basename}_{shard_idx:04d}.npy')
             np.save(file_path, arr[:token_count])
             progress_bar.write(f'Saved shard {shard_idx} to {file_path}')
 
