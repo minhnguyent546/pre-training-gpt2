@@ -170,7 +170,7 @@ class GPT(nn.Module):
         self.layer_norm = LayerNorm(self.config.d_model, eps=self.config.eps)  # additional layer normalization
         self.last_linear = nn.Linear(self.config.d_model, self.config.vocab_size)
         self.device = get_device(device)
-        self._use_tied_weights = config.tie_weights
+        self.use_tied_weights = config.tie_weights
 
         self.post_init()
 
@@ -189,7 +189,7 @@ class GPT(nn.Module):
         self._init_model_weights()
 
     def tie_weights(self) -> None:
-        if not self._use_tied_weights:
+        if not self.use_tied_weights:
             return
         if self.last_linear.weight.shape != self.token_embedding.weight.shape:
             raise ValueError(

@@ -54,3 +54,9 @@ save_interval: 4_000
 saved_checkpoint_limit: 10
 max_grad_norm: 1.0
 preload_checkpoint: null
+
+# training on xla device
+xla_one_core: false
+mp_start_method: fork
+ddp: false
+use_syncfree_optim: true # use sync-free optimizer for AMP
