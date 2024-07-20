@@ -326,7 +326,7 @@ def train_model(config: dict[str, Any]):
                 batch_loss = 0.0
 
                 if (global_step + 1) % valid_interval == 0:
-                    running_loss.all_reduce()
+                    running_loss.xla_all_reduce()
                     valid_results = eval_model(
                         model,
                         criterion,
@@ -426,7 +426,7 @@ def eval_model(
     # set model back to the original mode
     model.train(is_training)
 
-    running_loss.all_reduce()
+    running_loss.xla_all_reduce()
     return {
         'loss': running_loss.average,
     }
@@ -458,16 +458,15 @@ class AverageMeter:
 
     def reduce(self, dst: int) -> None:
         """
-        Perform in-place reduce
+        Perform in-place reduce.
 
-        Work on both CUDA and XLA device. On XLA device, it will call to
-        `ProcessGroup.reduce`, which will call to `reduce` in torch_xla/distributed/xla_backend.py module
-        (https://github.com/pytorch/xla/blob/master/torch_xla/distributed/xla_backend.py#L167).
-
-        Currently, which torch_xla version 2.3.1, this function raises `NotImplementedError`
-        on XLA device, prefer to use `all_reduce` instead.
-
+        For XLA device, refer to `xla_all_reduce` method.
         """
+        if self._is_xla_device():
+            raise NotImplementedError(
+                '`reduce` is not supported on XLA device. ',
+                'Please use `xla_all_reduce` instead.'
+            )
         torch_xla.distributed.xla_backend
         meters_to_reduce = torch.tensor([self.sum, self.count], dtype=torch.float32, device=self.device)
         # only `Tensor` of process with rank `dst` will be modified in-place,
@@ -477,18 +476,25 @@ class AverageMeter:
 
     def all_reduce(self) -> None:
         """
-        Perform in-place all-reduce
+        Perform in-place all-reduce.
 
-        Work on both CUDA and XLA device. On XLA device, it will call to
-        `ProcessGroup.all_reduce`, which will call to `allreduce` in torch_xla/distributed/xla_backend.py module
-        (https://github.com/pytorch/xla/blob/master/torch_xla/distributed/xla_backend.py#L67).
-
+        For XLA device, refer to `xla_all_reduce` method.
         """
+        if self._is_xla_device():
+            raise NotImplementedError(
+                '`all_reduce` is not supported on XLA device. ',
+                'Please use `xla_all_reduce` instead.'
+            )
         meters_to_reduce = torch.tensor([self.sum, self.count], dtype=torch.float32, device=self.device)
         dist.all_reduce(meters_to_reduce, op=dist.ReduceOp.SUM)
         self.sum, self.count = meters_to_reduce.tolist()
 
     def gather_object(self, dst: int, world_size: int, is_master: bool) -> list[dict[str, Any]] | None:
+        if self._is_xla_device():
+            raise NotImplementedError(
+                '`gather_object` is not supported on XLA device. ',
+                'Please use `xla_all_gather_object` instead.'
+            )
         if self._is_xla_device():
             raise NotImplementedError('`gather_object` is not supported on XLA device.')
         output = [None for _ in range(world_size)] if is_master else None
@@ -508,12 +514,21 @@ class AverageMeter:
         dist.all_gather_object(output, object_dict)
         return output
 
+    def xla_all_reduce(self) -> None:
+        if not self._is_xla_device():
+            raise RuntimeError('`xla_all_reduce` is only supported on XLA device')
+        meters_to_reduce = torch.tensor([self.sum, self.count], dtype=torch.float32, device=self.device)
+        xm.all_reduce(xm.REDUCE_SUM, meters_to_reduce, scale=1.0 / xr.world_size())
+        self.sum, self.count = meters_to_reduce.tolist()
+
     def xla_all_gather_object(self, world_size: int) -> list[dict[str, Any]]:
         """
         Modified from `torch/distributed/distributed_c10d.py`, work on both CUDA and XLA device.
 
         Note this function is experimental, use with caution.
         """
+        if not self._is_xla_device():
+            raise RuntimeError('`xla_all_reduce` is only supported on XLA device')
         input_tensor, local_size = utils.object_to_tensor(self.to_dict(), self.device)
 
         object_sizes_tensor = torch.zeros(
