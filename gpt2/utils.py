@@ -27,7 +27,6 @@ def set_seed(seed: int = 0x3f3f3f3f):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # xm.set_rng_state(seed)
 
 def load_yaml_config(config_path: str):
     with open(config_path) as config_file:
