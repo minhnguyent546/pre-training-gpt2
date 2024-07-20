@@ -5,7 +5,7 @@ import os
 import time
 from contextlib import nullcontext
 from tqdm.autonotebook import tqdm
-from typing import Any, Literal, Iterator
+from typing import Any, Iterator, Literal
 
 import wandb
 
@@ -16,6 +16,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
 
 import torch_xla as xla
 import torch_xla.amp
@@ -39,23 +40,41 @@ def train_model(config: dict[str, Any]):
 
     checkpoints_dir = utils.ensure_dir(config['checkpoints_dir'])
 
+    # training device
+    device = xm.xla_device()
+    device_hw = xm.xla_device_hw(device)
+
     # dataset
-    train_dataset = LMDataset(
+    train_lm_dataset = LMDataset(
         config['train_dir'],
         config['train_batch_size'],
         config['seq_length'],
-        shuffle=False,
         num_replicas=config['world_size'],
         rank=config['rank'],
     )
-    validation_dataset = LMDataset(
+    validation_lm_dataset = LMDataset(
         config['valid_dir'],
         config['eval_batch_size'],
         config['seq_length'],
-        shuffle=False,
         num_replicas=config['world_size'],
         rank=config['rank'],
     )
+
+    # data loader
+    train_data_loader = DataLoader(
+        train_lm_dataset,
+        batch_size=1,
+        shuffle=False,
+    )
+    validation_data_loader = DataLoader(
+        validation_lm_dataset,
+        batch_size=1,
+        shuffle=False,
+    )
+
+    # device loader
+    train_device_loader = xpl.MpDeviceLoader(train_data_loader, device=device)
+    validation_device_loader = xpl.MpDeviceLoader(validation_data_loader, device=device)
 
     # logging with wandb
     wandb_run = None
@@ -70,9 +89,6 @@ def train_model(config: dict[str, Any]):
             id=wandb_config.get('resume_id', None),
             resume='must' if wandb_config.get('resume_id', None) is not None else None,
         )
-    # training device
-    device = xm.xla_device()
-    device_hw = xm.xla_device_hw(device)
 
     # mixed precision training
     # note: AMP only supported for XLA:TPU and XLA:GPU
@@ -225,117 +241,119 @@ def train_model(config: dict[str, Any]):
     )
 
     batch_loss = 0.0
-    batch_idx = 0
     batch_fb_time = 0.0  # batch forward + backward time
     global_step = initial_step
     model.train()
     while global_step < train_steps:
         optimizer.zero_grad()
 
-        ts = time.monotonic()
-        input_ids, labels = train_dataset.next_batch()
-        input_ids = input_ids.type(torch.int64).to(device)
-        labels = labels.type(torch.int64).to(device)
-
-        if config['ddp']:
-            # we only sync gradients at the last step of gradient accumulation
-            # we can use the below trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
-            model.require_backward_grad_sync = (batch_idx + 1) % gradient_accum_step == 0
-        with autocast_context:
-            logits = model(input_ids)
-            loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
-
-        if gradient_accum_step > 1:
-            loss /= gradient_accum_step
-        # batch_loss += loss
-        batch_loss += loss.detach()
-        # batch_loss += loss.item()
-
-        scaler.scale(loss).backward()
-        utils.sync_host_device(device)
-        batch_fb_time += time.monotonic() - ts
-
-        if (batch_idx + 1) % gradient_accum_step == 0:
-            if config['max_grad_norm'] > 0:
-                scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
+        for batch_idx, (input_ids, labels) in enumerate(train_device_loader):
+            ts = time.monotonic()
+            if input_ids.dim() == 3:
+                assert input_ids.shape[0] == 1
+                input_ids = input_ids[0]
+            if labels.dim() == 3:
+                assert labels.shape[0] == 1
+                labels = labels[0]
+            input_ids = input_ids.type(torch.int64).to(device)
+            labels = labels.type(torch.int64).to(device)
 
             if config['ddp']:
-                scaler.step(optimizer)
-                xm.mark_step()
-            else:
-                if scaler.is_enabled():
-                    # reduce gradient manually
-                    gradients = xm._fetch_gradients(optimizer)  # pyright: ignore[reportPrivateUsage]
-                    xm.all_reduce(xm.REDUCE_SUM, gradients, scale=1.0 / config['world_size'])
+                # we only sync gradients at the last step of gradient accumulation
+                # we can use the below trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
+                model.require_backward_grad_sync = (batch_idx + 1) % gradient_accum_step == 0
+            with autocast_context:
+                logits = model(input_ids)
+                loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
+
+            if gradient_accum_step > 1:
+                loss /= gradient_accum_step
+            batch_loss += loss.detach()
+
+            scaler.scale(loss).backward()
+            utils.sync_host_device(device)
+            batch_fb_time += time.monotonic() - ts
+
+            if (batch_idx + 1) % gradient_accum_step == 0:
+                if config['max_grad_norm'] > 0:
+                    scaler.unscale_(optimizer)
+                    nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
+
+                if config['ddp']:
                     scaler.step(optimizer)
                 else:
-                    xm.optimizer_step(optimizer, barrier=True)
-            scaler.update()
-
-            batch_throughput = num_tokens_per_batch / batch_fb_time
-            batch_throughput *= config['world_size'] # estimate throughput when training with multiple gpus
-
-            if wandb_run is not None:
-                for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-                    wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
-                wandb_run.log({
-                    'loss/batch_loss': batch_loss,
-                    'throughput': batch_throughput,
-                }, step=global_step)
-
-            lr_scheduler.step()
-
-            # running_loss.update(batch_loss)
-            train_iter.set_postfix({
-                'loss': f'{batch_loss:0.3f}',
-                'throughput': f'{batch_throughput:0.3f} tokens/s'
-            })
-            batch_loss = 0.0
-            batch_fb_time = 0.0
-
-            if (global_step + 1) % valid_interval == 0:
-                running_loss.all_reduce()
-                valid_results = eval_model(
-                    model,
-                    criterion,
-                    validation_dataset,
-                    valid_steps,
-                    config,
-                    autocast_context,
-                )
-                if wandb_run is not None:
-                    wandb_run.log({
-                        'loss/train': running_loss.average,
-                        'loss/valid': valid_results['loss'],
-                    }, step=global_step + 1)
-                running_loss.reset()
-
-            if (global_step + 1) % save_interval == 0:
-                running_losses = running_loss.xla_all_gather_object(config['world_size'])
-                if config['is_master']:
-                    checkpoint_dict = {
-                        'model': raw_model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'lr_scheduler': lr_scheduler.state_dict(),
-                        'config': vars(gpt_config),
-                        'global_step': global_step + 1,
-                        'running_losses': running_losses,
-                    }
                     if scaler.is_enabled():
-                        checkpoint_dict['scaler'] = scaler.state_dict()
-                    utils.ensure_num_saved_checkpoints(
-                        config['checkpoints_dir'],
-                        'gpt2',
-                        config['saved_checkpoint_limit'],
+                        # reduce gradient manually
+                        gradients = xm._fetch_gradients(optimizer)  # pyright: ignore[reportPrivateUsage]
+                        xm.all_reduce(xm.REDUCE_SUM, gradients, scale=1.0 / config['world_size'])
+                        scaler.step(optimizer)
+                    else:
+                        xm.optimizer_step(optimizer, barrier=True)
+                scaler.update()
+
+                batch_throughput = num_tokens_per_batch / batch_fb_time
+                batch_throughput *= config['world_size'] # estimate throughput when training with multiple gpus
+
+                if wandb_run is not None:
+                    for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
+                        wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
+                    wandb_run.log({
+                        'loss/batch_loss': batch_loss,
+                        'throughput': batch_throughput,
+                    }, step=global_step)
+
+                lr_scheduler.step()
+
+                running_loss.update(batch_loss)
+                train_iter.set_postfix({
+                    'loss': f'{batch_loss:0.3f}',
+                    'throughput': f'{batch_throughput:0.3f} tokens/s'
+                })
+                batch_loss = 0.0
+                batch_fb_time = 0.0
+
+                if (global_step + 1) % valid_interval == 0:
+                    running_loss.all_reduce()
+                    valid_results = eval_model(
+                        model,
+                        criterion,
+                        validation_device_loader,
+                        valid_steps,
+                        config,
+                        autocast_context,
                     )
-                    model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
-                    xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=True)
+                    if wandb_run is not None:
+                        wandb_run.log({
+                            'loss/train': running_loss.average,
+                            'loss/valid': valid_results['loss'],
+                        }, step=global_step + 1)
+                    running_loss.reset()
 
-            global_step += 1
-            train_iter.update()
+                if (global_step + 1) % save_interval == 0:
+                    running_losses = running_loss.xla_all_gather_object(config['world_size'])
+                    if config['is_master']:
+                        checkpoint_dict = {
+                            'model': raw_model.state_dict(),
+                            'optimizer': optimizer.state_dict(),
+                            'lr_scheduler': lr_scheduler.state_dict(),
+                            'config': vars(gpt_config),
+                            'global_step': global_step + 1,
+                            'running_losses': running_losses,
+                        }
+                        if scaler.is_enabled():
+                            checkpoint_dict['scaler'] = scaler.state_dict()
+                        utils.ensure_num_saved_checkpoints(
+                            config['checkpoints_dir'],
+                            'gpt2',
+                            config['saved_checkpoint_limit'],
+                        )
+                        model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
+                        xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=True)
 
-        batch_idx += 1
+                global_step += 1
+                train_iter.update()
+                if global_step >= train_steps:
+                    break
 
 def _mp_fn(index: int, config: dict[str, Any]) -> None:
     setup_pjrt(config)
@@ -363,7 +381,7 @@ def main() -> None:
 def eval_model(
     model: GPT | DDP,
     criterion,
-    eval_dataset: LMDataset,
+    eval_data_loader: DataLoader | xpl.ParallelLoader,  # pyright: ignore[reportMissingTypeArgument]
     valid_steps: int,
     config: dict[str, Any],
     autocast_context=nullcontext,
@@ -388,8 +406,13 @@ def eval_model(
     is_training = model.training
     model.eval()
     accum_loss = 0.0
-    for _ in valid_iter:
-        input_ids, labels = eval_dataset.next_batch()
+    for batch_idx, (input_ids, labels) in enumerate(eval_data_loader):
+        if input_ids.dim() == 3:
+            assert input_ids.shape[0] == 1
+            input_ids = input_ids[0]
+        if labels.dim() == 3:
+            assert labels.shape[0] == 1
+            labels = labels[0]
         input_ids = input_ids.type(torch.int64).to(device)
         labels = labels.type(torch.int64).to(device)
         with autocast_context:
@@ -398,6 +421,9 @@ def eval_model(
 
         accum_loss += loss.detach()
         valid_iter.set_postfix({'loss': f'{loss:0.3f}'})
+        valid_iter.update()
+        if (batch_idx + 1) >= valid_steps:
+            break
 
     print('Done evaluation')
     accum_loss = accum_loss.item()
