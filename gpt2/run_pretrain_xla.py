@@ -225,13 +225,6 @@ def train_model(config: dict[str, Any]):
             id=wandb_config.get('resume_id', None),
             resume='must' if wandb_config.get('resume_id', None) is not None else None,
         )
-        wandb_run.define_metric('training_steps')
-        wandb_run.define_metric('loss/batch_loss', step_metric='training_steps')
-        wandb_run.define_metric('loss/train', step_metric='training_steps')
-        wandb_run.define_metric('loss/valid', step_metric='training_steps')
-        num_param_groups = len(optimizer.param_groups)
-        for group_id in range(num_param_groups):
-            wandb_run.define_metric(f'learning_rate/group_{group_id}', step_metric='training_steps')
 
     # training loop
     train_steps = config['train_steps']
@@ -301,12 +294,16 @@ def train_model(config: dict[str, Any]):
 
                 scaler.update()
 
-                wandb_accum_logs.append({
+                if not wandb_accum_logs:
+                    wandb_accum_logs.append({})
+                wandb_accum_logs[-1].update({
                     f'learning_rate/group_{group_id}': group_lr
                     for group_id, group_lr in enumerate(lr_scheduler.get_last_lr())
                 })
-                wandb_accum_logs[-1]['loss/batch_loss'] = batch_loss
-                wandb_accum_logs[-1]['training_steps'] = global_step
+                wandb_accum_logs[-1].update({
+                    'loss/batch_loss': batch_loss,
+                    'step': global_step,
+                })
                 if (
                     len(wandb_accum_logs) % wandb_logging_interval == 0 or
                     (len(wandb_accum_logs) > 0 and global_step + 1 >= train_steps)
@@ -341,14 +338,13 @@ def train_model(config: dict[str, Any]):
                         valid_steps,
                         autocast_context,
                     )
-                    if wandb_run is not None:
-                        wandb_run.log({
-                            'loss/train': running_loss.average,
-                            'loss/valid': valid_results['loss'],
-                            'training_steps': global_step + 1,
-                        })
+                    if not wandb_accum_logs:
+                        wandb_accum_logs.append({})
+                    wandb_accum_logs[-1].update({
+                        'loss/train': running_loss.average,
+                        'loss/valid': valid_results['loss'],
+                    })
                     running_loss.reset()
-                    xm.rendezvous('exit_wandb_validation_logging')
 
                 if (global_step + 1) % save_interval == 0:
                     if xm.is_master_ordinal():
@@ -436,7 +432,7 @@ def eval_model(
 
     # set model back to the original mode
     model.train(is_training)
-
+    xm.rendezvous('all_reduce_evaluation_loss')
     running_loss.xla_all_reduce()
     return {
         'loss': running_loss.average,
@@ -572,7 +568,6 @@ class AverageMeter:
         return object_list
 
     def reset(self) -> None:
-        self.value = 0.0
         self.sum = 0.0
         self.count = 0
 
@@ -581,7 +576,6 @@ class AverageMeter:
         if self.name:
             str_repr += f'name={self.name}, '
         str_repr += (
-            f'value={self.value}, '
             f'average={self.average}, '
             f'sum={self.sum}, '
             f'count={self.count}, '
