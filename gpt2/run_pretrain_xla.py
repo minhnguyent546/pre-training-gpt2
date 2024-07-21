@@ -294,9 +294,7 @@ def train_model(config: dict[str, Any]):
 
                 scaler.update()
 
-                if not wandb_accum_logs:
-                    wandb_accum_logs.append({})
-                wandb_accum_logs[-1].update({
+                wandb_accum_logs.append({
                     f'learning_rate/group_{group_id}': group_lr
                     for group_id, group_lr in enumerate(lr_scheduler.get_last_lr())
                 })
@@ -304,29 +302,9 @@ def train_model(config: dict[str, Any]):
                     'loss/batch_loss': batch_loss,
                     'step': global_step,
                 })
-                if (
-                    len(wandb_accum_logs) % wandb_logging_interval == 0 or
-                    (len(wandb_accum_logs) > 0 and global_step + 1 >= train_steps)
-                ):
-                    batch_loss_values = [loss['loss/batch_loss'] for loss in wandb_accum_logs]
-                    xm.rendezvous('all_reduce_batch_loss')
-                    reduced_batch_loss_values = xm.all_reduce(xm.REDUCE_SUM, torch.tensor(batch_loss_values, device=device), scale=1.0 / xr.world_size())
-                    reduced_batch_loss_values = batch_loss_values.tolist()
-                    for idx in range(len(wandb_accum_logs)):
-                        wandb_accum_logs[idx]['loss/batch_loss'] = reduced_batch_loss_values[idx]
-                    if wandb_run is not None:
-                        for log_idx in range(len(wandb_accum_logs)):
-                            wandb_run.log(wandb_accum_logs[log_idx])
-                    wandb_accum_logs = []
-                    xm.rendezvous('exit_wandb_logging')
 
                 lr_scheduler.step()
-
                 running_loss.update(batch_loss)
-                train_iter.set_postfix({
-                    'loss': f'{batch_loss:0.3f}',
-                })
-                batch_loss = 0.0
 
                 if (global_step + 1) % valid_interval == 0:
                     xm.rendezvous('all_reduce_running_loss')
@@ -338,13 +316,27 @@ def train_model(config: dict[str, Any]):
                         valid_steps,
                         autocast_context,
                     )
-                    if not wandb_accum_logs:
-                        wandb_accum_logs.append({})
                     wandb_accum_logs[-1].update({
                         'loss/train': running_loss.average,
                         'loss/valid': valid_results['loss'],
                     })
                     running_loss.reset()
+
+                if (
+                    len(wandb_accum_logs) >= wandb_logging_interval or
+                    (len(wandb_accum_logs) > 0 and global_step + 1 >= train_steps)
+                ):
+                    batch_loss_values = [loss['loss/batch_loss'] for loss in wandb_accum_logs]
+                    xm.rendezvous('all_reduce_batch_loss')
+                    reduced_batch_loss_values = xm.all_reduce(xm.REDUCE_SUM, torch.tensor(batch_loss_values, device=device), scale=1.0 / xr.world_size())
+                    reduced_batch_loss_values = reduced_batch_loss_values.tolist()
+                    for idx in range(len(wandb_accum_logs)):
+                        wandb_accum_logs[idx]['loss/batch_loss'] = reduced_batch_loss_values[idx]
+                    if wandb_run is not None:
+                        for log_idx in range(len(wandb_accum_logs)):
+                            wandb_run.log(wandb_accum_logs[log_idx])
+                    wandb_accum_logs = []
+                    xm.rendezvous('exit_wandb_logging')
 
                 if (global_step + 1) % save_interval == 0:
                     if xm.is_master_ordinal():
@@ -366,6 +358,10 @@ def train_model(config: dict[str, Any]):
                         xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=True)
                     xm.rendezvous('save_checkpoint')
 
+                train_iter.set_postfix({
+                    'loss': f'{batch_loss:0.3f}',
+                })
+                batch_loss = 0.0
                 global_step += 1
                 train_iter.update()
                 if global_step >= train_steps:
