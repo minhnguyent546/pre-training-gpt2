@@ -85,20 +85,6 @@ def train_model(config: dict[str, Any]):
     train_device_loader = xpl.MpDeviceLoader(train_data_loader, device=device)
     validation_device_loader = xpl.MpDeviceLoader(validation_data_loader, device=device)
 
-    # logging with wandb
-    wandb_run = None
-    wandb_config = config['wandb']
-    if xm.is_master_ordinal() and wandb_config['logging']:
-        wandb_run = wandb.init(
-            project=wandb_config['project'],
-            name=wandb_config['name'],
-            config=config,
-            tags=wandb_config.get('tags', None),
-            notes=wandb_config.get('notes', None),
-            id=wandb_config.get('resume_id', None),
-            resume='must' if wandb_config.get('resume_id', None) is not None else None,
-        )
-
     # mixed precision training
     # note: AMP only supported for XLA:TPU and XLA:GPU
     mp_dtype = torch.float32
@@ -226,6 +212,27 @@ def train_model(config: dict[str, Any]):
             broadcast_buffers=False,
         )
 
+    # logging with wandb
+    wandb_run = None
+    wandb_config = config['wandb']
+    if xm.is_master_ordinal() and wandb_config['logging']:
+        wandb_run = wandb.init(
+            project=wandb_config['project'],
+            name=wandb_config['name'],
+            config=config,
+            tags=wandb_config.get('tags', None),
+            notes=wandb_config.get('notes', None),
+            id=wandb_config.get('resume_id', None),
+            resume='must' if wandb_config.get('resume_id', None) is not None else None,
+        )
+        wandb_run.define_metric('training_steps')
+        wandb_run.define_metric('loss/batch_loss', step_metric='training_steps')
+        wandb_run.define_metric('loss/train', step_metric='training_steps')
+        wandb_run.define_metric('loss/valid', step_metric='training_steps')
+        num_param_groups = len(optimizer.param_groups)
+        for group_id in range(num_param_groups):
+            wandb_run.define_metric(f'learning_rate/group_{group_id}', step_metric='training_steps')
+
     # training loop
     train_steps = config['train_steps']
     valid_steps = config['valid_steps']
@@ -235,8 +242,8 @@ def train_model(config: dict[str, Any]):
 
     global_step = initial_step
     batch_loss = 0.0
-    batch_losses: list[float | torch.Tensor] = []
-    learning_rates: list[list[float]] = []
+    batch_losses: list[dict[str, Any]] = []
+    learning_rates: list[dict[str, Any]] = []
     running_loss = AverageMeter('running_losses', device=device)
     wandb_logging_interval = config['wandb']['logging_interval']
 
@@ -287,6 +294,7 @@ def train_model(config: dict[str, Any]):
                     if scaler.is_enabled():
                         # reduce gradient manually
                         gradients = xm._fetch_gradients(optimizer)  # pyright: ignore[reportPrivateUsage]
+                        xm.rendezvous('all_reduce_gradients')
                         xm.all_reduce(xm.REDUCE_SUM, gradients, scale=1.0 / xr.world_size())
                         scaler.step(optimizer)
                     else:
@@ -294,28 +302,29 @@ def train_model(config: dict[str, Any]):
 
                 scaler.update()
 
-                batch_losses.append(batch_loss)
-                for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-                    if group_id == 0:
-                        learning_rates.append([group_lr])
-                    else:
-                        learning_rates[-1].append(group_lr)
-
+                batch_losses.append({'loss/batch_loss': batch_loss, 'training_steps': global_step})
+                learning_rates.append({
+                    f'learning_rate/group_{group_id}': group_lr
+                    for group_id, group_lr in enumerate(lr_scheduler.get_last_lr())
+                })
+                learning_rates[-1]['training_steps'] = global_step
                 if (
                     len(batch_losses) % wandb_logging_interval == 0 or
                     (len(batch_losses) > 0 and global_step + 1 >= train_steps)
                 ):
-                    batch_losses = xm.all_reduce(xm.REDUCE_SUM, torch.tensor(batch_losses, device=device), scale=1.0 / xr.world_size())
-                    batch_losses = batch_losses.tolist()
+                    batch_loss_values = [loss['loss/batch_loss'] for loss in batch_losses]
+                    xm.rendezvous('all_reduce_batch_loss')
+                    batch_loss_values = xm.all_reduce(xm.REDUCE_SUM, torch.tensor(batch_loss_values, device=device), scale=1.0 / xr.world_size())
+                    batch_loss_values = batch_loss_values.tolist()
+                    for idx in range(len(batch_losses)):
+                        batch_losses[idx]['loss/batch_loss'] = batch_loss_values[idx]
                     if wandb_run is not None:
                         for log_idx in range(len(batch_losses)):
-                            log_dict = {}
-                            log_dict['loss/batch_loss'] = batch_losses[log_idx]
-                            for group_id, group_lr in enumerate(learning_rates[log_idx]):
-                                log_dict[f'learning_rate/group_{group_id}'] = group_lr
-                            wandb_run.log(log_dict, step=global_step-(len(batch_losses) - log_idx - 1))
+                            wandb_run.log(batch_losses[log_idx])
+                            wandb_run.log(learning_rates[log_idx])
                     batch_losses = []
                     learning_rates = []
+                    xm.rendezvous('exit_wandb_logging')
 
                 lr_scheduler.step()
 
@@ -326,6 +335,7 @@ def train_model(config: dict[str, Any]):
                 batch_loss = 0.0
 
                 if (global_step + 1) % valid_interval == 0:
+                    xm.rendezvous('all_reduce_running_loss')
                     running_loss.xla_all_reduce()
                     valid_results = eval_model(
                         model,
@@ -338,26 +348,30 @@ def train_model(config: dict[str, Any]):
                         wandb_run.log({
                             'loss/train': running_loss.average,
                             'loss/valid': valid_results['loss'],
-                        }, step=global_step + 1)
+                            'training_steps': global_step + 1,
+                        })
                     running_loss.reset()
+                    xm.rendezvous('exit_wandb_validation_logging')
 
-                if (global_step + 1) % save_interval == 0 and xm.is_master_ordinal():
-                    checkpoint_dict = {
-                        'model': raw_model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'lr_scheduler': lr_scheduler.state_dict(),
-                        'config': vars(gpt_config),
-                        'global_step': global_step + 1,
-                    }
-                    if scaler.is_enabled():
-                        checkpoint_dict['scaler'] = scaler.state_dict()
-                    utils.ensure_num_saved_checkpoints(
-                        checkpoints_dir=config['checkpoints_dir'],
-                        model_basename='gpt2',
-                        limit=config['saved_checkpoint_limit'],
-                    )
-                    model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
-                    xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=True)
+                if (global_step + 1) % save_interval == 0:
+                    if xm.is_master_ordinal():
+                        checkpoint_dict = {
+                            'model': raw_model.state_dict(),
+                            'optimizer': optimizer.state_dict(),
+                            'lr_scheduler': lr_scheduler.state_dict(),
+                            'config': vars(gpt_config),
+                            'global_step': global_step + 1,
+                        }
+                        if scaler.is_enabled():
+                            checkpoint_dict['scaler'] = scaler.state_dict()
+                        utils.ensure_num_saved_checkpoints(
+                            checkpoints_dir=config['checkpoints_dir'],
+                            model_basename='gpt2',
+                            limit=config['saved_checkpoint_limit'],
+                        )
+                        model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
+                        xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=True)
+                    xm.rendezvous('save_checkpoint')
 
                 global_step += 1
                 train_iter.update()
@@ -518,7 +532,7 @@ class AverageMeter:
         if not self._is_xla_device():
             raise RuntimeError('`xla_all_reduce` is only supported on XLA device')
         meters_to_reduce = torch.tensor([self.sum, self.count], dtype=torch.float32, device=self.device)
-        xm.all_reduce(xm.REDUCE_SUM, meters_to_reduce, scale=1.0 / xr.world_size())
+        meters_to_reduce = xm.all_reduce(xm.REDUCE_SUM, meters_to_reduce, scale=1.0 / xr.world_size())
         self.sum, self.count = meters_to_reduce.tolist()
 
     def xla_all_gather_object(self, world_size: int) -> list[dict[str, Any]]:
