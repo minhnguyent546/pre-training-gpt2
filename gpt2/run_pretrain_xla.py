@@ -123,7 +123,9 @@ def train_model(config: dict[str, Any]):
         )
     else:
         xm.master_print(f'Loading states from checkpoint {preload_checkpoint}')
-        saved_states = torch.load(preload_checkpoint, map_location=device)
+        # model is saved with xm.save() which moves tensors to CPU before saving,
+        # so we can safely discard `map_location`.
+        saved_states = torch.load(preload_checkpoint, map_location=None)
         required_keys = [
             'model',
             'optimizer',
