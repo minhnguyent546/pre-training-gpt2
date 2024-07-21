@@ -95,7 +95,7 @@ def train_model(config: dict[str, Any]):
             d_ff=config['d_ff'],
             dropout=config['dropout'],
             activation=config['activation'],
-            tie_weights=config['tie_weights'],
+            tie_weights=False,
         )
     else:
         if config['is_master']:
@@ -113,9 +113,13 @@ def train_model(config: dict[str, Any]):
             if key not in saved_states:
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         gpt_config = GPTConfig(**saved_states['config'])
-
+        config['tie_weights'] = config['tie_weights'] & gpt_config.tie_weights
     model = GPT(gpt_config)
     model.to(device)
+    if config['tie_weights']:
+        gpt_config.tie_weights = config['tie_weights']
+        model.use_tied_weights = True
+        model.tie_weights()
     criterion = nn.CrossEntropyLoss()
     learning_rate = config['optim']['lr']
     optimizer = utils.make_optimizer(

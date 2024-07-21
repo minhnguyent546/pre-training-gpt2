@@ -137,6 +137,8 @@ def train_model(config: dict[str, Any]):
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         # TODO: check keys that do not require configuration match
         gpt_config = GPTConfig(**saved_states['config'])
+        config['tie_weights'] = config['tie_weights'] & gpt_config.tie_weights
+        gpt_config.tie_weights = False
 
     model = GPT(gpt_config, device=device)
     model.to(device)
