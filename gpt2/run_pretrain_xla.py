@@ -242,8 +242,7 @@ def train_model(config: dict[str, Any]):
 
     global_step = initial_step
     batch_loss = 0.0
-    batch_losses: list[dict[str, Any]] = []
-    learning_rates: list[dict[str, Any]] = []
+    wandb_accum_logs: list[dict[str, Any]] = []
     running_loss = AverageMeter('running_losses', device=device)
     wandb_logging_interval = config['wandb']['logging_interval']
 
@@ -302,28 +301,26 @@ def train_model(config: dict[str, Any]):
 
                 scaler.update()
 
-                batch_losses.append({'loss/batch_loss': batch_loss, 'training_steps': global_step})
-                learning_rates.append({
+                wandb_accum_logs.append({
                     f'learning_rate/group_{group_id}': group_lr
                     for group_id, group_lr in enumerate(lr_scheduler.get_last_lr())
                 })
-                learning_rates[-1]['training_steps'] = global_step
+                wandb_accum_logs[-1]['loss/batch_loss'] = batch_loss
+                wandb_accum_logs[-1]['training_steps'] = global_step
                 if (
-                    len(batch_losses) % wandb_logging_interval == 0 or
-                    (len(batch_losses) > 0 and global_step + 1 >= train_steps)
+                    len(wandb_accum_logs) % wandb_logging_interval == 0 or
+                    (len(wandb_accum_logs) > 0 and global_step + 1 >= train_steps)
                 ):
-                    batch_loss_values = [loss['loss/batch_loss'] for loss in batch_losses]
+                    batch_loss_values = [loss['loss/batch_loss'] for loss in wandb_accum_logs]
                     xm.rendezvous('all_reduce_batch_loss')
-                    batch_loss_values = xm.all_reduce(xm.REDUCE_SUM, torch.tensor(batch_loss_values, device=device), scale=1.0 / xr.world_size())
-                    batch_loss_values = batch_loss_values.tolist()
-                    for idx in range(len(batch_losses)):
-                        batch_losses[idx]['loss/batch_loss'] = batch_loss_values[idx]
+                    reduced_batch_loss_values = xm.all_reduce(xm.REDUCE_SUM, torch.tensor(batch_loss_values, device=device), scale=1.0 / xr.world_size())
+                    reduced_batch_loss_values = batch_loss_values.tolist()
+                    for idx in range(len(wandb_accum_logs)):
+                        wandb_accum_logs[idx]['loss/batch_loss'] = reduced_batch_loss_values[idx]
                     if wandb_run is not None:
-                        for log_idx in range(len(batch_losses)):
-                            wandb_run.log(batch_losses[log_idx])
-                            wandb_run.log(learning_rates[log_idx])
-                    batch_losses = []
-                    learning_rates = []
+                        for log_idx in range(len(wandb_accum_logs)):
+                            wandb_run.log(wandb_accum_logs[log_idx])
+                    wandb_accum_logs = []
                     xm.rendezvous('exit_wandb_logging')
 
                 lr_scheduler.step()
