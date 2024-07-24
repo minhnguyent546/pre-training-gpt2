@@ -55,7 +55,7 @@ valid_interval: 3_000
 save_interval: 4_000
 saved_checkpoint_limit: 10
 max_grad_norm: 1.0
-preload_checkpoint: null
+from_checkpoint: null
 
 # training on xla device
 xla_one_core: false

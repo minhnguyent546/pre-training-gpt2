@@ -82,10 +82,11 @@ def train_model(config: dict[str, Any]):
     autocast_context = torch.cuda.amp.autocast(enabled=(mp_dtype in (torch.float16, torch.bfloat16)), dtype=mp_dtype)
     scaler = torch.cuda.amp.GradScaler(enabled=(mp_dtype == torch.float16))
 
-    # resume from previous checkpoint
-    preload_checkpoint = config['preload_checkpoint']
+    # resume from checkpoint
+    from_checkpoint = config['from_checkpoint']
+    pretrained_models = ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']
     saved_states = None
-    if preload_checkpoint is None:
+    if from_checkpoint is None:
         gpt_config = GPTConfig(
             vocab_size=config['vocab_size'],
             seq_length=config['seq_length'],
@@ -95,12 +96,28 @@ def train_model(config: dict[str, Any]):
             d_ff=config['d_ff'],
             dropout=config['dropout'],
             activation=config['activation'],
-            tie_weights=False,
+            tie_weights=config['tie_weights'],
         )
+        model = GPT(gpt_config)
+    elif from_checkpoint in pretrained_models:
+        if config['is_master']:
+            print(f'Loading states from pretrained model {from_checkpoint}')
+        gpt_config = GPTConfig(
+            vocab_size=config['vocab_size'],
+            seq_length=config['seq_length'],
+            d_model=config['d_model'],
+            num_layers=config['num_layers'],
+            num_heads=config['num_heads'],
+            d_ff=config['d_ff'],
+            dropout=config['dropout'],
+            activation=config['activation'],
+            tie_weights=config['tie_weights'],
+        )
+        model = GPT.from_pretrained(from_checkpoint, gpt_config)
     else:
         if config['is_master']:
-            print(f'Loading states from checkpoint {preload_checkpoint}')
-        saved_states = torch.load(preload_checkpoint, map_location=device)
+            print(f'Loading states from checkpoint {from_checkpoint}')
+        saved_states = torch.load(from_checkpoint, map_location=device)
         required_keys = [
             'model',
             'optimizer',
@@ -113,12 +130,10 @@ def train_model(config: dict[str, Any]):
             if key not in saved_states:
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         gpt_config = GPTConfig(**saved_states['config'])
-        config['tie_weights'] = config['tie_weights'] & gpt_config.tie_weights
-    model = GPT(gpt_config)
+        model = GPT(gpt_config)
+
     model.to(device)
-    if config['tie_weights']:
-        gpt_config.tie_weights = config['tie_weights']
-        model.use_tied_weights = True
+    if model.config.tie_weights:
         model.tie_weights()
     criterion = nn.CrossEntropyLoss()
     learning_rate = config['optim']['lr']
@@ -271,6 +286,7 @@ def train_model(config: dict[str, Any]):
                     running_loss.reduce(dst=config['master_rank'])
                 valid_results = eval_model(
                     model,
+                    device,
                     criterion,
                     validation_dataset,
                     valid_steps,
@@ -338,13 +354,13 @@ def main():
 @torch.no_grad()
 def eval_model(
     model: GPT | DDP,
+    device: torch.device,
     criterion,
     eval_dataset: LMDataset,
     valid_steps: int,
     config: dict[str, Any],
     autocast_context=nullcontext,
 ) -> dict[str, float]:
-    device = model.device
     evaluation_loss = AverageMeter('evaluation_loss', device=device)
 
     if config['ddp']:

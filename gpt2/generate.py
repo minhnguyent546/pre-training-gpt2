@@ -3,7 +3,7 @@ import argparse
 import torch
 from torch import Tensor
 
-from tokenizers import Tokenizer
+import tiktoken
 
 import gpt2.utils as utils
 from gpt2.model import GPT, GPTConfig
@@ -18,9 +18,9 @@ def parse_opts(parser):
     )
     parser.add_argument(
         '--tokenizer',
-        help='Path to the tokenizer',
-        required=True,
+        help='Which tokenizer to use for tokenizing tokens (see tiktoken for all available options)',
         type=str,
+        default='gpt2',
     )
     parser.add_argument(
         '--seed',
@@ -65,17 +65,24 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    checkpoint_state_dict = torch.load(args.model, map_location=device)
-    gpt_config = GPTConfig(**checkpoint_state_dict['config'])
-    model = GPT(gpt_config, device=device)
-    model.load_state_dict(checkpoint_state_dict['model'])
+    pretrained_models = ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']
+    if args.model in pretrained_models:
+        gpt_config = GPTConfig(tie_weights=True)  # gpt2 checkpoints always use tied_weights
+        model = GPT.from_pretrained(args.model, gpt_config)
+    else:
+        checkpoint_state_dict = torch.load(args.model, map_location=device)
+        gpt_config = GPTConfig(**checkpoint_state_dict['config'])
+        model = GPT(gpt_config)
+        model.load_state_dict(checkpoint_state_dict['model'])
     model.to(device)
+    if model.config.tie_weights:
+        model.tie_weights()
 
-    tokenizer: Tokenizer = Tokenizer.from_file(args.tokenizer)
+    tokenizer = tiktoken.encoding_for_model('gpt2')
 
     while True:
         start_sentence = input('>> ')
-        start_ids = tokenizer.encode(start_sentence).ids
+        start_ids = tokenizer.encode(start_sentence)
         start_ids = Tensor(start_ids).type(torch.int32).unsqueeze_(0).to(device)
 
         gen_ids = model.generate(
@@ -86,8 +93,7 @@ def main():
             top_p=args.top_p,
         )
         gen_ids = gen_ids.detach().cpu().numpy()[0]
-        gen_sentence = tokenizer.decode(gen_ids, skip_special_tokens=False)
-        gen_sentence = gen_sentence.replace(' <|endoftext|> ', '\n')
+        gen_sentence = tokenizer.decode(gen_ids)
         print(gen_sentence)
 
 

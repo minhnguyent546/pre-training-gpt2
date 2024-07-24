@@ -106,10 +106,11 @@ def train_model(config: dict[str, Any]):
     # scaling is not needed for bfoat16
     scaler = torch_xla.amp.GradScaler(enabled=(mp_dtype == torch.float16 and device_hw != 'TPU'))
 
-    # resume from previous checkpoint
-    preload_checkpoint = config['preload_checkpoint']
+    # resume from checkpoint
+    from_checkpoint = config['from_checkpoint']
+    pretrained_models = ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']
     saved_states = None
-    if preload_checkpoint is None:
+    if from_checkpoint is None:
         gpt_config = GPTConfig(
             vocab_size=config['vocab_size'],
             seq_length=config['seq_length'],
@@ -119,13 +120,27 @@ def train_model(config: dict[str, Any]):
             d_ff=config['d_ff'],
             dropout=config['dropout'],
             activation=config['activation'],
-            tie_weights=False,
+            tie_weights=config['tie_weights'],
         )
+    elif from_checkpoint in pretrained_models:
+        xm.master_print(f'Loading states from pretrained model {from_checkpoint}')
+        gpt_config = GPTConfig(
+            vocab_size=config['vocab_size'],
+            seq_length=config['seq_length'],
+            d_model=config['d_model'],
+            num_layers=config['num_layers'],
+            num_heads=config['num_heads'],
+            d_ff=config['d_ff'],
+            dropout=config['dropout'],
+            activation=config['activation'],
+            tie_weights=config['tie_weights'],
+        )
+        model = GPT.from_pretrained(from_checkpoint, gpt_config)
     else:
-        xm.master_print(f'Loading states from checkpoint {preload_checkpoint}')
+        xm.master_print(f'Loading states from checkpoint {from_checkpoint}')
         # model is saved with xm.save() which moves tensors to CPU before saving,
         # so we can safely discard `map_location`.
-        saved_states = torch.load(preload_checkpoint, map_location=None)
+        saved_states = torch.load(from_checkpoint, map_location=None)
         required_keys = [
             'model',
             'optimizer',
@@ -139,16 +154,12 @@ def train_model(config: dict[str, Any]):
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         # TODO: check keys that do not require configuration match
         gpt_config = GPTConfig(**saved_states['config'])
-        config['tie_weights'] = config['tie_weights'] & gpt_config.tie_weights
-        gpt_config.tie_weights = False
 
-    model = GPT(gpt_config, device=device)
+    model = GPT(gpt_config)
     model.to(device)
     # tie_weights must be called after moving to device if we are on XLA device,
     # otherwise it will be treated as separate Tensors.
-    if config['tie_weights']:
-        gpt_config.tie_weights = config['tie_weights']
-        model.use_tied_weights = True
+    if model.config.tie_weights:
         model.tie_weights()
     criterion = nn.CrossEntropyLoss()
     learning_rate = config['optim']['lr']
