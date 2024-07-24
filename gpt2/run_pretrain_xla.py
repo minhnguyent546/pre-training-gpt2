@@ -136,6 +136,8 @@ def train_model(config: dict[str, Any]):
             tie_weights=config['tie_weights'],
         )
         model = GPT.from_pretrained(from_checkpoint, gpt_config)
+        model.truncate_seq_length(config['seq_length'])
+        gpt_config.seq_length = config['seq_length']
     else:
         xm.master_print(f'Loading states from checkpoint {from_checkpoint}')
         # model is saved with xm.save() which moves tensors to CPU before saving,

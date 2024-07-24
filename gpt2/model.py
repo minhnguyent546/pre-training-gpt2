@@ -334,6 +334,8 @@ class GPT(nn.Module):
                 'Unable to truncate seq_length. The value to truncate to cannot be '
                 f'larger than the current value {self.config.seq_length}'
             )
+        if seq_length == self.config.seq_length:
+            return
         self.config.seq_length = seq_length
         self.positional_embedding.weight = nn.Parameter(self.positional_embedding.weight[:seq_length])
         self.positional_embedding.num_embeddings = seq_length

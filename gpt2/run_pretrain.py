@@ -114,6 +114,8 @@ def train_model(config: dict[str, Any]):
             tie_weights=config['tie_weights'],
         )
         model = GPT.from_pretrained(from_checkpoint, gpt_config)
+        model.truncate_seq_length(config['seq_length'])
+        gpt_config.seq_length = config['seq_length']
     else:
         if config['is_master']:
             print(f'Loading states from checkpoint {from_checkpoint}')
