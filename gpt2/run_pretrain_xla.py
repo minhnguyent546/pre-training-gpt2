@@ -122,6 +122,7 @@ def train_model(config: dict[str, Any]):
             activation=config['activation'],
             tie_weights=config['tie_weights'],
         )
+        model = GPT(gpt_config)
     elif from_checkpoint in pretrained_models:
         xm.master_print(f'Loading states from pretrained model {from_checkpoint}')
         gpt_config = GPTConfig(
@@ -156,8 +157,8 @@ def train_model(config: dict[str, Any]):
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         # TODO: check keys that do not require configuration match
         gpt_config = GPTConfig(**saved_states['config'])
+        model = GPT(gpt_config)
 
-    model = GPT(gpt_config)
     model.to(device)
     # tie_weights must be called after moving to device if we are on XLA device,
     # otherwise it will be treated as separate Tensors.
