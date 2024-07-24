@@ -236,6 +236,20 @@ def train_model(config: dict[str, Any]):
             broadcast_buffers=False,
         )
 
+    if config['do_test']:
+        valid_results = eval_model(
+            model,
+            device,
+            criterion,
+            validation_device_loader,
+            config['valid_steps'],
+            autocast_context,
+        )
+        xm.master_print('** Testing results **')
+        xm.master_print(f'Loss: {valid_results["loss"]}')
+        xm.master_print(f'Perplexity: {utils.get_perplexity(valid_results["loss"])}')
+        return
+
     # logging with wandb
     wandb_run = None
     wandb_config = config['wandb']

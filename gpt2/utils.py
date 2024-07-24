@@ -237,3 +237,6 @@ def tensor_to_object(tensor, tensor_size, group=None):
     tensor = tensor.cpu()
     buf = tensor.numpy().tobytes()[:tensor_size]
     return Unpickler(io.BytesIO(buf)).load()
+
+def get_perplexity(loss: float) -> float:
+    return math.exp(loss)
