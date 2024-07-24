@@ -29,6 +29,7 @@ def train_model(config: dict[str, Any]):
     checkpoints_dir = utils.ensure_dir(config['checkpoints_dir'])
 
     # dataset
+    # TODO: FIX ME
     train_dataset = LMDataset(
         config['train_dir'],
         config['train_batch_size'],
@@ -37,6 +38,7 @@ def train_model(config: dict[str, Any]):
         num_replicas=config['world_size'] if config['ddp'] else 1,
         rank=config['rank'] if config['ddp'] else 0,
     )
+    # TODO: FIX ME
     validation_dataset = LMDataset(
         config['valid_dir'],
         config['eval_batch_size'],
@@ -113,7 +115,16 @@ def train_model(config: dict[str, Any]):
             activation=config['activation'],
             tie_weights=config['tie_weights'],
         )
-        model = GPT.from_pretrained(from_checkpoint, gpt_config)
+        if config['ddp']:
+            if config['local_rank'] == 0:
+                # make sure the checkpoint is downloaded only once by the local master process
+                model = GPT.from_pretrained(from_checkpoint, gpt_config)
+                dist.barrier()
+            else:
+                dist.barrier()
+                model = GPT.from_pretrained(from_checkpoint, gpt_config)
+        else:
+            model = GPT.from_pretrained(from_checkpoint, gpt_config)
         model.truncate_seq_length(config['seq_length'])
         gpt_config.seq_length = config['seq_length']
     else:

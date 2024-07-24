@@ -136,7 +136,13 @@ def train_model(config: dict[str, Any]):
             activation=config['activation'],
             tie_weights=config['tie_weights'],
         )
-        model = GPT.from_pretrained(from_checkpoint, gpt_config)
+        if xm.is_master_ordinal(local=True):
+            # make sure the checkpoint is downloaded only once by the local master process
+            model = GPT.from_pretrained(from_checkpoint, gpt_config)
+            xm.rendezvous('checkpoint_downloaded')
+        else:
+            xm.rendezvous('checkpoint_downloaded')
+            model = GPT.from_pretrained(from_checkpoint, gpt_config)
         model.truncate_seq_length(config['seq_length'])
         gpt_config.seq_length = config['seq_length']
     else:

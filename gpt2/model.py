@@ -234,10 +234,10 @@ class GPT(nn.Module):
             'lm_head.weight'                        : 'lm_head.weight',
         }
         checkpoint_config_map = {
-            'openai-community/gpt2': dict(vocab_size=50257, seq_length=1024, d_model=768, num_layers=12, num_heads=12, d_ff=3072),
-            'openai-community/gpt2-medium': dict(vocab_size=50257, seq_length=1024, d_model=1024, num_layers=24, num_heads=16, d_ff=4096),
-            'openai-community/gpt2-large': dict(vocab_size=50257, seq_length=1024, d_model=1280, num_layers=36, num_heads=20, d_ff=5120),
-            'openai-community/gpt2-xl': dict(vocab_size=50257, seq_length=1024, d_model=1600, num_layers=48, num_heads=25, d_ff=6400),
+            'openai-community/gpt2': dict(vocab_size=50257, seq_length=1024, d_model=768, num_layers=12, num_heads=12, d_ff=3072),  # num_params: 124439808
+            'openai-community/gpt2-medium': dict(vocab_size=50257, seq_length=1024, d_model=1024, num_layers=24, num_heads=16, d_ff=4096),  # num_params: 354823168
+            'openai-community/gpt2-large': dict(vocab_size=50257, seq_length=1024, d_model=1280, num_layers=36, num_heads=20, d_ff=5120),  # num_params: 774030080
+            'openai-community/gpt2-xl': dict(vocab_size=50257, seq_length=1024, d_model=1600, num_layers=48, num_heads=25, d_ff=6400),  # num_params: 1557611200
         }
         from transformers import GPT2LMHeadModel
 
