@@ -335,6 +335,7 @@ def train_model(config: dict[str, Any]):
                     running_loss.xla_all_reduce()
                     valid_results = eval_model(
                         model,
+                        device,
                         criterion,
                         validation_device_loader,
                         valid_steps,
@@ -414,12 +415,12 @@ def main() -> None:
 @torch.no_grad()
 def eval_model(
     model,
+    device: torch.device,
     criterion,
     eval_data_loader,
     valid_steps: int,
     autocast_context=nullcontext,
 ) -> dict[str, float]:
-    device = model.device
     device_hw = xm.xla_device_hw(device)
     progess_bar = tqdm(
         range(valid_steps),

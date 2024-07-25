@@ -337,8 +337,8 @@ class GPT(nn.Module):
         if seq_length == self.config.seq_length:
             return
         self.config.seq_length = seq_length
-        self.positional_embedding.weight = nn.Parameter(self.positional_embedding.weight[:seq_length])
+        self.positional_embedding.weight = nn.Parameter(self.positional_embedding.weight[:seq_length, :])
         self.positional_embedding.num_embeddings = seq_length
         for block in self.decoder_blocks:
             if hasattr(block.causal_self_attention, 'causal_mask'):
-                block.causal_self_attention.causal_mask = block.causal_self_attention.causal_mask[:, :, seq_length, seq_length]
+                block.causal_self_attention.causal_mask = block.causal_self_attention.causal_mask[:, :, :seq_length, :seq_length]
