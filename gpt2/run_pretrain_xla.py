@@ -253,10 +253,9 @@ def train_model(config: dict[str, Any]):
 
     # set model in training mode
     model.train()
+    optimizer.zero_grad()
     while global_step < train_steps:
         for batch_idx, (input_ids, labels) in enumerate(train_device_loader):
-            optimizer.zero_grad()
-
             if input_ids.dim() == 3:
                 assert input_ids.shape[0] == 1
                 input_ids = input_ids[0]
@@ -297,6 +296,7 @@ def train_model(config: dict[str, Any]):
                         xm.optimizer_step(optimizer)
 
                 scaler.update()
+                optimizer.zero_grad()
 
                 wandb_accum_logs.append({
                     f'learning_rate/group_{group_id}': group_lr

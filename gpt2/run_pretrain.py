@@ -186,8 +186,6 @@ def train_model(config: dict[str, Any]):
     gradient_accum_step = config['gradient_accum_step']
     num_tokens_per_batch = config['train_batch_size'] * gradient_accum_step * config['seq_length']
 
-    model.train()
-
     if config['is_master']:
         num_parameters = sum(param.numel() for param in model.parameters() if param.requires_grad)
         print(f'Model has {num_parameters / 10 ** 6:0.2f}M parameters')
@@ -210,10 +208,12 @@ def train_model(config: dict[str, Any]):
     batch_idx = 0
     batch_fb_time = 0.0  # batch forward + backward time
     global_step = initial_step
-    torch.cuda.empty_cache()
-    while global_step < train_steps:
-        optimizer.zero_grad()
 
+    # set model in training mode
+    model.train()
+    torch.cuda.empty_cache()
+    optimizer.zero_grad()
+    while global_step < train_steps:
         ts = time.monotonic()
         input_ids, labels = train_dataset.next_batch()
         input_ids = input_ids.type(torch.int64).to(device)
@@ -243,6 +243,7 @@ def train_model(config: dict[str, Any]):
 
             scaler.step(optimizer)
             scaler.update()
+            optimizer.zero_grad()
 
             batch_throughput = num_tokens_per_batch / batch_fb_time
             if config['ddp']:
