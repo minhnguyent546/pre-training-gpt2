@@ -279,22 +279,13 @@ def train_model(config: dict[str, Any]):
             scaler.scale(loss).backward()
 
             if (batch_idx + 1) % gradient_accum_step == 0:
+                if not config['ddp']:
+                    xm.reduce_gradients(optimizer)
                 if config['max_grad_norm'] > 0:
                     scaler.unscale_(optimizer)
                     nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
 
-                if config['ddp']:
-                    scaler.step(optimizer)
-                else:
-                    if scaler.is_enabled():
-                        # reduce gradient manually
-                        gradients = xm._fetch_gradients(optimizer)  # pyright: ignore[reportPrivateUsage]
-                        xm.rendezvous('all_reduce_gradients')
-                        xm.all_reduce(xm.REDUCE_SUM, gradients, scale=1.0 / xr.world_size())
-                        scaler.step(optimizer)
-                    else:
-                        xm.optimizer_step(optimizer)
-
+                scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
 
