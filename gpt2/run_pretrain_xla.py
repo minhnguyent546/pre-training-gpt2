@@ -16,7 +16,7 @@ from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 
-import torch_xla as xla
+import torch_xla as xla  # noqa: F401
 import torch_xla.amp
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.parallel_loader as xpl
@@ -27,6 +27,7 @@ import torch_xla.runtime as xr
 
 import gpt2.utils as utils
 from gpt2.lm_dataset import LMDataset
+from gpt2.meters import XLAAverageMeter
 from gpt2.model import GPT, GPTConfig
 
 
@@ -240,7 +241,7 @@ def train_model(config: dict[str, Any]):
     global_step = initial_step
     batch_loss = 0.0
     wandb_accum_logs: list[dict[str, Any]] = []
-    running_loss = AverageMeter('running_losses', device=device)
+    running_loss = XLAAverageMeter('running_losses', device=device)
     wandb_logging_interval = config['wandb']['logging_interval']
 
     xm.master_print(f'Model has {utils.count_model_param(raw_model) / 10 ** 6:0.2f}M parameters')
@@ -303,7 +304,7 @@ def train_model(config: dict[str, Any]):
 
                 if (global_step + 1) % valid_interval == 0:
                     xm.rendezvous('all_reduce_running_loss')
-                    running_loss.xla_all_reduce()
+                    running_loss.all_reduce()
                     valid_results = eval_model(
                         model,
                         criterion,
@@ -399,7 +400,7 @@ def eval_model(
         ncols=120,
     )
 
-    running_loss = AverageMeter('running_loss', device=device)
+    running_loss = XLAAverageMeter('running_loss', device=device)
 
     # set model in evaluation mode
     is_training = model.training
@@ -424,161 +425,10 @@ def eval_model(
     # set model back to the original mode
     model.train(is_training)
     xm.rendezvous('all_reduce_evaluation_loss')
-    running_loss.xla_all_reduce()
+    running_loss.all_reduce()
     return {
         'loss': running_loss.average,
     }
-
-class AverageMeter:
-    """A class for working with average meters."""
-    def __init__(
-        self,
-        name: str = '',
-        sum: int | float = 0.0,
-        count: int = 0,
-        device: torch.device | None = None,
-    ) -> None:
-        self.name = name
-        self.sum = sum
-        self.count = count
-        self.device = device
-
-    @property
-    def average(self) -> float:
-        try:
-            return self.sum / self.count
-        except ZeroDivisionError:
-            return 0.0
-
-    def update(self, value: int | float, nums: int = 1) -> None:
-        self.sum += value * nums
-        self.count += nums
-
-    def reduce(self, dst: int) -> None:
-        """
-        Perform in-place reduce.
-
-        For XLA device, refer to `xla_all_reduce` method.
-        """
-        if self._is_xla_device():
-            raise NotImplementedError(
-                '`reduce` is not supported on XLA device. ',
-                'Please use `xla_all_reduce` instead.'
-            )
-        torch_xla.distributed.xla_backend
-        meters_to_reduce = torch.tensor([self.sum, self.count], dtype=torch.float32, device=self.device)
-        # only `Tensor` of process with rank `dst` will be modified in-place,
-        # `Tensor` of other processes will remain the same
-        dist.reduce(meters_to_reduce, dst=dst, op=dist.ReduceOp.SUM)
-        self.sum, self.count = meters_to_reduce.tolist()
-
-    def all_reduce(self) -> None:
-        """
-        Perform in-place all-reduce.
-
-        For XLA device, refer to `xla_all_reduce` method.
-        """
-        if self._is_xla_device():
-            raise NotImplementedError(
-                '`all_reduce` is not supported on XLA device. ',
-                'Please use `xla_all_reduce` instead.'
-            )
-        meters_to_reduce = torch.tensor([self.sum, self.count], dtype=torch.float32, device=self.device)
-        dist.all_reduce(meters_to_reduce, op=dist.ReduceOp.SUM)
-        self.sum, self.count = meters_to_reduce.tolist()
-
-    def gather_object(self, dst: int, world_size: int, is_master: bool) -> list[dict[str, Any]] | None:
-        if self._is_xla_device():
-            raise NotImplementedError(
-                '`gather_object` is not supported on XLA device. ',
-                'Please use `xla_all_gather_object` instead.'
-            )
-        if self._is_xla_device():
-            raise NotImplementedError('`gather_object` is not supported on XLA device.')
-        output = [None for _ in range(world_size)] if is_master else None
-        object_dict = self.to_dict()
-        dist.gather_object(object_dict, output, dst)
-        assert output is not None if is_master else None
-        return output
-
-    def all_gather_object(self, world_size: int) -> list[dict[str, Any]]:
-        if self._is_xla_device():
-            raise NotImplementedError(
-                '`all_gather_object` is not supported on XLA device. ',
-                'Please use `xla_all_gather_object` instead.'
-            )
-        output = [None for _ in range(world_size)]
-        object_dict = self.to_dict()
-        dist.all_gather_object(output, object_dict)
-        return output
-
-    def xla_all_reduce(self) -> None:
-        if not self._is_xla_device():
-            raise RuntimeError('`xla_all_reduce` is only supported on XLA device')
-        meters_to_reduce = torch.tensor([self.sum, self.count], dtype=torch.float32, device=self.device)
-        meters_to_reduce = xm.all_reduce(xm.REDUCE_SUM, meters_to_reduce, scale=1.0 / xr.world_size())
-        self.sum, self.count = meters_to_reduce.tolist()
-
-    def xla_all_gather_object(self, world_size: int) -> list[dict[str, Any]]:
-        """
-        Modified from `torch/distributed/distributed_c10d.py`, work on both CUDA and XLA device.
-
-        Note this function is experimental, use with caution.
-        """
-        if not self._is_xla_device():
-            raise RuntimeError('`xla_all_reduce` is only supported on XLA device')
-        input_tensor, local_size = utils.object_to_tensor(self.to_dict(), self.device)
-
-        object_sizes_tensor = torch.zeros(
-            world_size, dtype=torch.long, device=self.device,
-        )
-        object_size_list = [
-            object_sizes_tensor[i].unsqueeze(dim=0) for i in range(world_size)
-        ]
-        dist.all_gather(object_size_list, local_size)
-        max_object_size = int(max(object_size_list).item())  # pyright: ignore
-
-        # resize tensor to max size across all ranks.
-        input_tensor.resize_(max_object_size)
-        coalesced_output_tensor = torch.empty(
-            max_object_size * world_size, dtype=torch.uint8, device=self.device,
-        )
-        # output tensors are nonoverlapping views of coalesced_output_tensor
-        output_tensors = [
-            coalesced_output_tensor[max_object_size * i:max_object_size * (i + 1)]
-            for i in range(world_size)
-        ]
-        dist.all_gather(output_tensors, input_tensor)
-
-        # deserialize outputs back to object.
-        object_list = [None for _ in range(world_size)]
-        for i, tensor in enumerate(output_tensors):
-            tensor = tensor.type(torch.uint8)
-            tensor_size = object_size_list[i]
-            object_list[i] = utils.tensor_to_object(tensor, tensor_size)
-        return object_list
-
-    def reset(self) -> None:
-        self.sum = 0.0
-        self.count = 0
-
-    def __repr__(self) -> str:
-        str_repr = f'{self.__class__.__name__}('
-        if self.name:
-            str_repr += f'name={self.name}, '
-        str_repr += (
-            f'average={self.average}, '
-            f'sum={self.sum}, '
-            f'count={self.count}, '
-            f'device={self.device})'
-        )
-        return str_repr
-
-    def to_dict(self) -> dict[str, Any]:
-        return vars(self)
-
-    def _is_xla_device(self) -> bool:
-        return self.device is not None and self.device.type == 'xla'
 
 
 if __name__ == '__main__':

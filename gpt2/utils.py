@@ -17,6 +17,10 @@ import torch.nn as nn
 import torch.nn.functional as Fun
 from torch import Tensor
 
+if 'PJRT_DEVICE' in os.environ:
+    import torch_xla as xla  # noqa: F401
+    import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
+
 
 def set_seed(seed: int = 0x3f3f3f3f):
     random.seed(seed)
@@ -83,8 +87,6 @@ def make_optimizer(
     ]
     optim_type = optim_type.lower()
     use_fused_impl = device.type == 'cuda'
-    if use_syncfree_optim:
-        import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
     if optim_type == 'adam':
         adam_optim = syncfree.Adam if use_syncfree_optim else torch.optim.Adam
         optimizer = adam_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
