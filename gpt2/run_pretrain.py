@@ -28,22 +28,38 @@ def train_model(config: dict[str, Any]):
 
     checkpoints_dir = utils.ensure_dir(config['checkpoints_dir'])
 
+    train_batch_size = config['train_batch_size']
+    eval_batch_size = config['eval_batch_size']
+
+    if train_batch_size % config['world_size'] != 0:
+        raise ValueError('train_batch_size must be divisible by world_size')
+    if eval_batch_size % config['world_size'] != 0:
+        raise ValueError('eval_batch_size must be divisible by world_size')
+    train_batch_size //= config['world_size']
+    eval_batch_size //= config['world_size']
+    effective_batch_size = train_batch_size * config['world_size'] * config['gradient_accum_step']
+    if config['is_master']:
+        print(
+            f'Effective batch size: {effective_batch_size} '
+            f'(micro_batch_size={train_batch_size}, '
+            f'gradient_accum_step={config["gradient_accum_step"]}, '
+            f'num_devices={config["world_size"]})'
+        )
+
     # dataset
     train_dataset = LMDataset(
         config['train_dir'],
-        config['train_batch_size'],
+        train_batch_size,
         config['seq_length'],
-        shuffle=True,
-        num_replicas=config['world_size'] if config['ddp'] else 1,
-        rank=config['rank'] if config['ddp'] else 0,
+        num_replicas=config['world_size'],
+        rank=config['rank'],
     )
     validation_dataset = LMDataset(
         config['valid_dir'],
-        config['eval_batch_size'],
+        eval_batch_size,
         config['seq_length'],
-        shuffle=False,
-        num_replicas=config['world_size'] if config['ddp'] else 1,
-        rank=config['rank'] if config['ddp'] else 0,
+        num_replicas=config['world_size'],
+        rank=config['rank'],
     )
 
     # logging with wandb
@@ -78,7 +94,7 @@ def train_model(config: dict[str, Any]):
         else:
             mp_dtype = torch.float16
             if config['is_master']:
-                print('bf16 is not supported on your hardware, fallback to mixed precision training with fp16')
+                print('bf16 is not supported on your hardware, fallback to fp16')
     autocast_context = torch.cuda.amp.autocast(enabled=(mp_dtype in (torch.float16, torch.bfloat16)), dtype=mp_dtype)
     scaler = torch.cuda.amp.GradScaler(enabled=(mp_dtype == torch.float16))
 
@@ -184,7 +200,7 @@ def train_model(config: dict[str, Any]):
     valid_interval = config['valid_interval']
     save_interval = config['save_interval']
     gradient_accum_step = config['gradient_accum_step']
-    num_tokens_per_batch = config['train_batch_size'] * gradient_accum_step * config['seq_length']
+    num_tokens_per_batch = train_batch_size * gradient_accum_step * config['seq_length']
 
     if config['is_master']:
         num_parameters = sum(param.numel() for param in model.parameters() if param.requires_grad)
@@ -205,115 +221,114 @@ def train_model(config: dict[str, Any]):
         )
 
     batch_loss = 0.0
-    batch_idx = 0
     batch_fb_time = 0.0  # batch forward + backward time
     global_step = initial_step
 
     # set model in training mode
     model.train()
-    torch.cuda.empty_cache()
     optimizer.zero_grad()
     while global_step < train_steps:
-        ts = time.monotonic()
-        input_ids, labels = train_dataset.next_batch()
-        input_ids = input_ids.type(torch.int64).to(device)
-        labels = labels.type(torch.int64).to(device)
+        ts = time.perf_counter()
+        for batch_idx, (input_ids, labels) in enumerate(train_dataset):
+            input_ids = input_ids.to(device)
+            labels = labels.to(device)
 
-        if config['ddp']:
-            # we only sync gradients at the last step of gradient accumulation
-            # we can use the below trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
-            model.require_backward_grad_sync = (batch_idx + 1) % gradient_accum_step == 0
-        with autocast_context:
-            logits = model(input_ids)
-            loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
-
-        if gradient_accum_step > 1:
-            loss /= gradient_accum_step
-        batch_loss += loss.detach()
-
-        scaler.scale(loss).backward()
-        if device.type == 'cuda':
-            torch.cuda.synchronize()
-        batch_fb_time += time.monotonic() - ts
-
-        if (batch_idx + 1) % gradient_accum_step == 0:
-            if config['max_grad_norm'] > 0:
-                scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
-
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
-
-            batch_throughput = num_tokens_per_batch / batch_fb_time
             if config['ddp']:
-                batch_throughput *= config['world_size']  # estimate throughput when training with multiple gpus
+                # we only sync gradients at the last step of gradient accumulation
+                # we can use the below trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
+                model.require_backward_grad_sync = (batch_idx + 1) % gradient_accum_step == 0
 
-            if wandb_run is not None:
-                for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-                    wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
-                wandb_run.log({
-                    'loss/batch_loss': batch_loss,
-                    'throughput': batch_throughput,
-                }, step=global_step)
+            with autocast_context:
+                logits = model(input_ids)
+                loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
 
-            lr_scheduler.step()
+            if gradient_accum_step > 1:
+                loss /= gradient_accum_step
+            batch_loss += loss.detach()
 
-            running_loss.update(batch_loss)
-            train_iter.set_postfix({
-                'loss': f'{batch_loss:0.3f}',
-                'throughput': f'{batch_throughput:0.3f} tokens/s'
-            })
-            batch_loss = 0.0
-            batch_fb_time = 0.0
+            scaler.scale(loss).backward()
 
-            if (global_step + 1) % valid_interval == 0:
-                if config['ddp']:
-                    running_loss.reduce(dst=config['master_rank'])
-                valid_results = eval_model(
-                    model,
-                    criterion,
-                    validation_dataset,
-                    valid_steps,
-                    config,
-                    autocast_context,
-                )
+            if device.type == 'cuda':
+                torch.cuda.synchronize()
+            batch_fb_time += time.perf_counter() - ts
+
+            if (batch_idx + 1) % gradient_accum_step == 0:
+                if config['max_grad_norm'] > 0:
+                    scaler.unscale_(optimizer)
+                    nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
+
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
+                batch_throughput = num_tokens_per_batch / batch_fb_time
+                batch_throughput *= config['world_size']  # estimate throughput across devices
+
                 if wandb_run is not None:
+                    for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
+                        wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
                     wandb_run.log({
-                        'loss/train': running_loss.average,
-                        'loss/valid': valid_results['loss'],
-                    }, step=global_step + 1)
-                running_loss.reset()
+                        'loss/batch_loss': batch_loss,
+                        'throughput': batch_throughput,
+                    }, step=global_step)
 
-            if (global_step + 1) % save_interval == 0:
-                if config['ddp']:
-                    running_losses = [None for _ in range(config['world_size'])] if config['is_master'] else None
-                    dist.gather_object(vars(running_loss), running_losses, dst=config['master_rank'])
-                else:
-                    running_losses = running_loss
-                if config['is_master']:
-                    checkpoint_dict = {
-                        'model': raw_model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'lr_scheduler': lr_scheduler.state_dict(),
-                        'config': vars(gpt_config),
-                        'global_step': global_step + 1,
-                        'running_loss': running_losses,
-                    }
-                    if scaler.is_enabled():
-                        checkpoint_dict['scaler'] = scaler.state_dict()
-                    utils.ensure_num_saved_checkpoints(
-                        config['checkpoints_dir'],
-                        'gpt2',
-                        config['saved_checkpoint_limit'],
+                lr_scheduler.step()
+
+                running_loss.update(batch_loss)
+                train_iter.set_postfix({
+                    'loss': f'{batch_loss:0.3f}',
+                    'throughput': f'{batch_throughput:0.3f} tokens/s'
+                })
+                batch_loss = 0.0
+                batch_fb_time = 0.0
+
+                if (global_step + 1) % valid_interval == 0:
+                    if config['ddp']:
+                        running_loss.reduce(dst=config['master_rank'])
+                    valid_results = eval_model(
+                        model,
+                        criterion,
+                        validation_dataset,
+                        valid_steps,
+                        config,
+                        autocast_context,
                     )
-                    model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
-                    torch.save(checkpoint_dict, model_save_path)
+                    if wandb_run is not None:
+                        wandb_run.log({
+                            'loss/train': running_loss.average,
+                            'loss/valid': valid_results['loss'],
+                        }, step=global_step + 1)
+                    running_loss.reset()
 
-            global_step += 1
-            train_iter.update()
+                if (global_step + 1) % save_interval == 0:
+                    if config['ddp']:
+                        running_losses = [None for _ in range(config['world_size'])] if config['is_master'] else None
+                        dist.gather_object(vars(running_loss), running_losses, dst=config['master_rank'])
+                    else:
+                        running_losses = running_loss
+                    if config['is_master']:
+                        checkpoint_dict = {
+                            'model': raw_model.state_dict(),
+                            'optimizer': optimizer.state_dict(),
+                            'lr_scheduler': lr_scheduler.state_dict(),
+                            'config': vars(gpt_config),
+                            'global_step': global_step + 1,
+                            'running_loss': running_losses,
+                        }
+                        if scaler.is_enabled():
+                            checkpoint_dict['scaler'] = scaler.state_dict()
+                        utils.ensure_num_saved_checkpoints(
+                            config['checkpoints_dir'],
+                            'gpt2',
+                            config['saved_checkpoint_limit'],
+                        )
+                        model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
+                        torch.save(checkpoint_dict, model_save_path)
 
-        batch_idx += 1
+                global_step += 1
+                train_iter.update()
+                if global_step >= train_steps:
+                    break
 
 def main():
     parser = argparse.ArgumentParser(
@@ -333,8 +348,7 @@ def main():
 
     train_model(config)
 
-    if config['ddp']:
-        dist.destroy_process_group()
+    cleanup_ddp(config)
 
 @torch.no_grad()
 def eval_model(
@@ -349,7 +363,7 @@ def eval_model(
     evaluation_loss = AverageMeter('evaluation_loss', device=device)
 
     if config['ddp']:
-        valid_iter = tqdm(
+        progress_bar = tqdm(
             range(valid_steps),
             total=valid_steps,
             desc=f'GPU{config["rank"]} - Evaluating model',
@@ -357,67 +371,57 @@ def eval_model(
             ncols=120,
         )
     else:
-        valid_iter = tqdm(
+        progress_bar = tqdm(
             range(valid_steps),
             total=valid_steps,
             desc='Evaluating model',
             ncols=120,
         )
 
+    # set model in evaluation mode
     is_training = model.training
     model.eval()
 
-    accum_loss = 0.0
-    for _ in valid_iter:
-        input_ids, labels = eval_dataset.next_batch()
-        input_ids = input_ids.type(torch.int64).to(device)
-        labels = labels.type(torch.int64).to(device)
+    for batch_idx, (input_ids, labels) in enumerate(eval_dataset):
+        input_ids = input_ids.to(device)
+        labels = labels.to(device)
 
         with autocast_context:
             logits = model(input_ids)
             loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
 
-        evaluation_loss.update(loss.item())
-        valid_iter.set_postfix({'loss': f'{loss:0.3f}'})
-        accum_loss += loss.detach().item()
+        evaluation_loss.update(loss.detach())
+        progress_bar.set_postfix({'loss': f'{loss:0.3f}'})
+        progress_bar.update()
+        if (batch_idx + 1) >= valid_steps:
+            break
 
-    print(f"{accum_loss = }")
+    # set model back to the original mode
+    model.train(is_training)
+
     if config['ddp']:
         evaluation_loss.reduce(dst=config['master_rank'])
-
-    model.train(is_training)
 
     return {
         'loss': evaluation_loss.average,
     }
 
 def setup_ddp(config: dict[str, Any]) -> None:
-    config['rank'] = int(os.environ.get('RANK', -1))
-    config['ddp'] = config['rank'] != -1
-    config['master_rank'] = 0 if config['ddp'] else -1
+    config['rank'] = int(os.environ.get('RANK', 0))
+    config['local_rank'] = int(os.environ.get('LOCAL_RANK', 0))
+    config['world_size'] = int(os.environ.get('WORLD_SIZE', 1))
+    config['ddp'] = os.environ.get('RANK', -1) != -1
+    config['master_rank'] = 0
     config['is_master'] = config['rank'] == config['master_rank']
     if config['ddp']:
-        config['local_rank'] = int(os.environ['LOCAL_RANK'])
-        config['world_size'] = int(os.environ['WORLD_SIZE'])
-
         # set appropriate CUDA device
         torch.cuda.set_device(config['local_rank'])
-
         # init process group
         dist.init_process_group(backend=config.get('ddp_backend', 'nccl'))  # nccl, gloo, etc
 
-        # we need to divide the batch_size for batching across multiple-GPUs manually
-        for key in ('train_batch_size', 'eval_batch_size'):
-            assert config[key] % config['world_size'] == 0
-            config[key] //= config['world_size']
-            if config['is_master']:
-                if key == 'train_batch_size' and config['gradient_accum_step'] > 1:
-                    print(
-                        f'{key} per GPU is {config[key]} '
-                        f'(with gradient accum steps = {config["gradient_accum_step"]})'
-                    )
-                else:
-                    print(f'{key} per GPU is {config[key]}')
+def cleanup_ddp(config: dict[str, Any]):
+    if config['ddp']:
+        dist.destroy_process_group()
 
 class AverageMeter:
     """A class for working with average meters."""
