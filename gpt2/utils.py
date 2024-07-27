@@ -17,10 +17,6 @@ import torch.nn as nn
 import torch.nn.functional as Fun
 from torch import Tensor
 
-import torch_xla as xla
-import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
-import torch_xla.core.xla_model as xm
-
 
 def set_seed(seed: int = 0x3f3f3f3f):
     random.seed(seed)
@@ -87,6 +83,8 @@ def make_optimizer(
     ]
     optim_type = optim_type.lower()
     use_fused_impl = device.type == 'cuda'
+    if use_syncfree_optim:
+        import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
     if optim_type == 'adam':
         adam_optim = syncfree.Adam if use_syncfree_optim else torch.optim.Adam
         optimizer = adam_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
@@ -212,13 +210,6 @@ def ensure_num_saved_checkpoints(
 
 def count_model_param(model: nn.Module) -> int:
     return sum(param.numel() for param in model.parameters() if param.requires_grad)
-
-def sync_host_device(device: torch.device) -> None:
-    """Synchronize between host and device."""
-    if device.type == 'cuda':
-        torch.cuda.synchronize()
-    elif device.type == 'xla':
-        xm.wait_device_ops()
 
 def object_to_tensor(obj, device, group=None):
     """Modified from `torch/distributed/distributed_c10d.py`."""

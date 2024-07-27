@@ -228,8 +228,8 @@ def train_model(config: dict[str, Any]):
     model.train()
     optimizer.zero_grad()
     while global_step < train_steps:
-        ts = time.perf_counter()
         for batch_idx, (input_ids, labels) in enumerate(train_dataset):
+            ts = time.perf_counter()
             input_ids = input_ids.to(device)
             labels = labels.to(device)
 
@@ -266,7 +266,7 @@ def train_model(config: dict[str, Any]):
 
                 if wandb_run is not None:
                     for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-                        wandb_run.log({f'learning_rate/group-{group_id}': group_lr}, step=global_step)
+                        wandb_run.log({f'learning_rate/group_{group_id}': group_lr}, step=global_step)
                     wandb_run.log({
                         'loss/batch_loss': batch_loss,
                         'throughput': batch_throughput,
