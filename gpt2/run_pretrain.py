@@ -10,6 +10,7 @@ from typing import Any
 import wandb
 
 import torch
+import torch.amp
 import torch.distributed as dist
 import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -96,6 +97,7 @@ def train_model(args: argparse.Namespace) -> None:
     scaler = torch.cuda.amp.GradScaler(enabled=(mp_dtype == torch.float16))
 
     # resume from previous checkpoint
+    pretrained_models = ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']
     saved_states = None
     if args.from_checkpoint is None:
         gpt_config = GPTConfig(
@@ -107,8 +109,35 @@ def train_model(args: argparse.Namespace) -> None:
             d_ff=args.d_ff,
             dropout=args.dropout,
             activation=args.activation,
-            tie_weights=False,
+            tie_weights=args.tie_weights,
         )
+        model = GPT(gpt_config)
+    elif args.from_checkpoint in pretrained_models:
+        if args.is_master:
+            print(f'Loading states from pretrained model {args.from_checkpoint}')
+        gpt_config = GPTConfig(
+            vocab_size=args.vocab_size,
+            seq_length=args.seq_length,
+            d_model=args.d_model,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+            d_ff=args.d_ff,
+            dropout=args.dropout,
+            activation=args.activation,
+            tie_weights=args.tie_weights,
+        )
+        if args.ddp_enabled:
+            if args.local_rank == 0:
+                # make sure the checkpoint is downloaded only once by the local master process
+                model = GPT.from_pretrained(args.from_checkpoint, gpt_config)
+                dist.barrier()
+            else:
+                dist.barrier()
+                model = GPT.from_pretrained(args.from_checkpoint, gpt_config)
+        else:
+            model = GPT.from_pretrained(args.from_checkpoint, gpt_config)
+        model.truncate_seq_length(args.seq_length)
+        gpt_config.seq_length = args.seq_length
     else:
         if args.is_master:
             print(f'Loading states from checkpoint {args.from_checkpoint}')
@@ -125,12 +154,10 @@ def train_model(args: argparse.Namespace) -> None:
             if key not in saved_states:
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         gpt_config = GPTConfig(**saved_states['config'])
-        args.tie_weights = args.tie_weights & gpt_config.tie_weights
-    model = GPT(gpt_config)
+        model = GPT(gpt_config)
+
     model.to(device)
-    if args.tie_weights:
-        gpt_config.tie_weights = args.tie_weights
-        model.use_tied_weights = True
+    if model.config.tie_weights:
         model.tie_weights()
     criterion = nn.CrossEntropyLoss()
     learning_rate = args.learning_rate
@@ -181,6 +208,22 @@ def train_model(args: argparse.Namespace) -> None:
     # convert the model to distributed data parallel
     if args.ddp_enabled:
         model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
+
+    if args.do_test:
+        valid_results = eval_model(
+            model,
+            device,
+            criterion,
+            validation_dataset,
+            args.valid_steps,
+            args,
+            autocast_context,
+        )
+        if args.is_master:
+            print('** Testing results **')
+            print(f'Loss: {valid_results["loss"]}')
+            print(f'Perplexity: {utils.get_perplexity(valid_results["loss"])}')
+        return
 
     # training loop
     num_tokens_per_batch = train_batch_size * args.gradient_accum_step * args.seq_length
@@ -268,6 +311,7 @@ def train_model(args: argparse.Namespace) -> None:
                         running_loss.reduce(dst=args.master_rank)
                     valid_results = eval_model(
                         model,
+                        device,
                         criterion,
                         validation_dataset,
                         args.valid_steps,
@@ -347,14 +391,16 @@ def main():
 @torch.no_grad()
 def eval_model(
     model: GPT | DDP,
+    device: torch.device,
     criterion,
     eval_dataset: LMDataset,
     valid_steps: int,
     args: argparse.Namespace,
-    autocast_context=nullcontext,
+    autocast_context=None,
 ) -> dict[str, float]:
-    device = model.device
     evaluation_loss = AverageMeter('evaluation_loss', device=device)
+    if autocast_context is None:
+        autocast_context = nullcontext()
 
     if args.ddp_enabled:
         progress_bar = tqdm(

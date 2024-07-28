@@ -29,6 +29,7 @@ wandb:
   tags: null
 
 # training
+do_test: false
 ddp_backend: nccl # nccl, gloo, etc
 compile: false # whether to compile the model (for faster training)
 matmul_precision: highest # see: https://pytorch.org/docs/2.3/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
@@ -55,7 +56,7 @@ valid_interval: 3_000
 save_interval: 4_000
 saved_checkpoint_limit: 10
 max_grad_norm: 1.0
-preload_checkpoint: null
+from_checkpoint: null
 
 # training on xla device
 xla_one_core: false

@@ -115,6 +115,7 @@ def train_model(args: argparse.Namespace):
     scaler = torch_xla.amp.GradScaler(enabled=(mp_dtype == torch.float16 and device_hw != 'TPU'))
 
     # resume from previous checkpoint
+    pretrained_models = ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']
     saved_states = None
     if args.from_checkpoint is None:
         gpt_config = GPTConfig(
@@ -126,8 +127,31 @@ def train_model(args: argparse.Namespace):
             d_ff=args.d_ff,
             dropout=args.dropout,
             activation=args.activation,
-            tie_weights=False,
+            tie_weights=args.tie_weights,
         )
+        model = GPT(gpt_config)
+    elif args.from_checkpoint in pretrained_models:
+        xm.master_print(f'Loading states from pretrained model {args.from_checkpoint}')
+        gpt_config = GPTConfig(
+            vocab_size=args.vocab_size,
+            seq_length=args.seq_length,
+            d_model=args.d_model,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+            d_ff=args.d_ff,
+            dropout=args.dropout,
+            activation=args.activation,
+            tie_weights=args.tie_weights,
+        )
+        if xm.is_master_ordinal(local=True):
+            # make sure the checkpoint is downloaded only once by the local master process
+            model = GPT.from_pretrained(args.from_checkpoint, gpt_config)
+            xm.rendezvous('checkpoint_downloaded')
+        else:
+            xm.rendezvous('checkpoint_downloaded')
+            model = GPT.from_pretrained(args.from_checkpoint, gpt_config)
+        model.truncate_seq_length(args.seq_length)
+        gpt_config.seq_length = args.seq_length
     else:
         xm.master_print(f'Loading states from checkpoint {args.from_checkpoint}')
         # model is saved with xm.save() which moves tensors to CPU before saving,
@@ -146,16 +170,12 @@ def train_model(args: argparse.Namespace):
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         # TODO: check keys that do not require configuration match
         gpt_config = GPTConfig(**saved_states['config'])
-        args.tie_weights = args.tie_weights & gpt_config.tie_weights
-        gpt_config.tie_weights = False
+        model = GPT(gpt_config)
 
-    model = GPT(gpt_config, device=device)
     model.to(device)
     # tie_weights must be called after moving to device if we are on XLA device,
     # otherwise it will be treated as separate Tensors.
-    if args.tie_weights:
-        gpt_config.tie_weights = args.tie_weights
-        model.use_tied_weights = True
+    if model.config.tie_weights:
         model.tie_weights()
     criterion = nn.CrossEntropyLoss()
     learning_rate = args.learning_rate
@@ -220,6 +240,20 @@ def train_model(args: argparse.Namespace):
             gradient_as_bucket_view=True,
             broadcast_buffers=False,
         )
+
+    if args.do_test:
+        valid_results = eval_model(
+            model,
+            device,
+            criterion,
+            validation_device_loader,
+            args.valid_steps,
+            autocast_context,
+        )
+        xm.master_print('** Testing results **')
+        xm.master_print(f'Loss: {valid_results["loss"]}')
+        xm.master_print(f'Perplexity: {utils.get_perplexity(valid_results["loss"])}')
+        return
 
     # logging with wandb
     wandb_run = None
@@ -304,6 +338,7 @@ def train_model(args: argparse.Namespace):
                     running_loss.all_reduce()
                     valid_results = eval_model(
                         model,
+                        device,
                         criterion,
                         validation_device_loader,
                         args.valid_steps,
@@ -377,13 +412,15 @@ def main() -> None:
 @torch.no_grad()
 def eval_model(
     model,
+    device: torch.device,
     criterion,
     eval_data_loader,
     valid_steps: int,
-    autocast_context=nullcontext,
+    autocast_context=None,
 ) -> dict[str, float]:
-    device = model.device
     device_hw = xm.xla_device_hw(device)
+    if autocast_context is None:
+        autocast_context = nullcontext()
     progess_bar = tqdm(
         range(valid_steps),
         desc=f'{device_hw}:{xr.global_ordinal()} - Evaluating model',

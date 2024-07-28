@@ -155,6 +155,11 @@ def _add_wandb_opts(parser: argparse.ArgumentParser) -> None:
 def _add_common_training_opts(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group('Training')
     group.add_argument(
+        '--do-test',
+        help='Run test only',
+        action='store_true',
+    )
+    group.add_argument(
         '--compile',
         help='Whether to compile the model with torch.compile',
         action='store_true',
