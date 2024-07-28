@@ -5,6 +5,7 @@ import os
 import time
 from contextlib import nullcontext
 from tqdm.autonotebook import tqdm
+from typing import Any
 
 import wandb
 
@@ -161,7 +162,6 @@ def train_model(args: argparse.Namespace) -> None:
         raise ValueError(f'Unsupported scheduler decay method: {args.decay_method}')
 
     initial_step = 0
-    running_loss = AverageMeter('running_loss', device=device)
     if saved_states is not None:
         model.load_state_dict(saved_states['model'])
         optimizer.load_state_dict(saved_states['optimizer'])
@@ -170,11 +170,6 @@ def train_model(args: argparse.Namespace) -> None:
             scaler.load_state_dict(saved_states['scaler'])
         if 'global_step' in saved_states:
             initial_step = saved_states['global_step']
-        if 'running_loss' in saved_states:
-            if args.ddp_enabled:
-                running_loss = AverageMeter(**saved_states['running_loss'][args.rank])
-            else:
-                running_loss = AverageMeter(**saved_states['running_loss'])
 
     raw_model = model
     # compile the model
@@ -208,9 +203,11 @@ def train_model(args: argparse.Namespace) -> None:
             ncols=120,
         )
 
+    global_step = initial_step
     batch_loss = 0.0
     batch_fb_time = 0.0  # batch forward + backward time
-    global_step = initial_step
+    wandb_accum_logs: list[dict[str, Any]] = []
+    running_loss = AverageMeter('running_loss', device=device)
 
     # set model in training mode
     model.train()
@@ -252,23 +249,19 @@ def train_model(args: argparse.Namespace) -> None:
                 batch_throughput = num_tokens_per_batch / batch_fb_time
                 batch_throughput *= args.world_size  # estimate throughput across devices
 
-                if wandb_run is not None:
-                    for group_id, group_lr in enumerate(lr_scheduler.get_last_lr()):
-                        wandb_run.log({f'learning_rate/group_{group_id}': group_lr}, step=global_step)
-                    wandb_run.log({
-                        'loss/batch_loss': batch_loss,
-                        'throughput': batch_throughput,
-                    }, step=global_step)
+                # TODO: handle the case when wandb is disabled
+                wandb_accum_logs.append({
+                    f'learning_rate/group_{group_id}': group_lr
+                    for group_id, group_lr in enumerate(lr_scheduler.get_last_lr())
+                })
+                wandb_accum_logs[-1].update({
+                    'loss/batch_loss': batch_loss,
+                    'throughput': batch_throughput,
+                    'step': global_step,
+                })
 
                 lr_scheduler.step()
-
                 running_loss.update(batch_loss)
-                train_iter.set_postfix({
-                    'loss': f'{batch_loss:0.3f}',
-                    'throughput': f'{batch_throughput:0.3f} tokens/s'
-                })
-                batch_loss = 0.0
-                batch_fb_time = 0.0
 
                 if (global_step + 1) % args.valid_interval == 0:
                     if args.ddp_enabled:
@@ -281,22 +274,32 @@ def train_model(args: argparse.Namespace) -> None:
                         args,
                         autocast_context,
                     )
-                    if wandb_run is not None:
-                        wandb_run.log({
-                            'loss/train': running_loss.average,
-                            'loss/valid': valid_results['loss'],
-                        }, step=global_step + 1)
+                    wandb_accum_logs[-1].update({
+                        'loss/train': running_loss.average,
+                        'loss/valid': valid_results['loss'],
+                    })
                     running_loss.reset()
 
+                if (
+                    len(wandb_accum_logs) >= args.wandb_logging_interval or
+                    (len(wandb_accum_logs) > 0 and global_step + 1 >= args.train_steps)
+                ):
+                    batch_loss_values = torch.tensor(
+                        [loss['loss/batch_loss'] for loss in wandb_accum_logs],
+                        dtype=torch.float32,
+                        device=device,
+                    )
+                    dist.all_reduce(batch_loss_values, op=dist.ReduceOp.AVG)
+                    reduced_batch_loss_values = batch_loss_values.tolist()
+                    for idx in range(len(wandb_accum_logs)):
+                        wandb_accum_logs[idx]['loss/batch_loss'] = reduced_batch_loss_values[idx]
+                    if wandb_run is not None:
+                        for log_idx in range(len(wandb_accum_logs)):
+                            wandb_run.log(wandb_accum_logs[log_idx])
+                    wandb_accum_logs = []
+                    dist.barrier()
+
                 if (global_step + 1) % args.save_interval == 0:
-                    if args.ddp_enabled:
-                        running_losses = running_loss.gather_object(
-                            dst=args.master_rank,
-                            world_size=args.world_size,
-                            is_master=args.is_master,
-                        )
-                    else:
-                        running_losses = running_loss
                     if args.is_master:
                         checkpoint_dict = {
                             'model': raw_model.state_dict(),
@@ -304,7 +307,6 @@ def train_model(args: argparse.Namespace) -> None:
                             'lr_scheduler': lr_scheduler.state_dict(),
                             'config': vars(gpt_config),
                             'global_step': global_step + 1,
-                            'running_loss': running_losses,
                         }
                         if scaler.is_enabled():
                             checkpoint_dict['scaler'] = scaler.state_dict()
@@ -315,7 +317,14 @@ def train_model(args: argparse.Namespace) -> None:
                         )
                         model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
                         torch.save(checkpoint_dict, model_save_path)
+                    dist.barrier()
 
+                train_iter.set_postfix({
+                    'loss': f'{batch_loss:0.3f}',
+                    'throughput': f'{batch_throughput:0.3f} tokens/s'
+                })
+                batch_loss = 0.0
+                batch_fb_time = 0.0
                 global_step += 1
                 train_iter.update()
                 if global_step >= args.train_steps:

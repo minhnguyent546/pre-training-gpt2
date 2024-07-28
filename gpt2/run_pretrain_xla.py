@@ -286,6 +286,7 @@ def train_model(args: argparse.Namespace):
                 scaler.update()
                 optimizer.zero_grad()
 
+                # TODO: handle the case when wandb is disabled
                 wandb_accum_logs.append({
                     f'learning_rate/group_{group_id}': group_lr
                     for group_id, group_lr in enumerate(lr_scheduler.get_last_lr())
