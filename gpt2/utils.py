@@ -68,6 +68,9 @@ def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
+def is_xla_device(device: torch.device | None) -> bool:
+    return device is not None and device.type == 'xla'
+
 def make_optimizer(
     model,
     device: torch.device,

@@ -25,45 +25,52 @@ import torch_xla.distributed.xla_multiprocessing as xmp
 # import torch_xla.experimental.pjrt_backend  # required for TPU v2/v3 as TPU v2/v3 support in `torch.distributed` is still experimental
 import torch_xla.runtime as xr
 
+import gpt2.opts as opts
 import gpt2.utils as utils
 from gpt2.lm_dataset import LMDataset
 from gpt2.meters import XLAAverageMeter
 from gpt2.model import GPT, GPTConfig
 
 
-def train_model(config: dict[str, Any]):
-    utils.set_seed(config['seed'])
-    xm.set_rng_state(config['seed'])
+def train_model(args: argparse.Namespace):
+    utils.set_seed(args.seed)
+    xm.set_rng_state(args.seed)
 
-    checkpoints_dir = utils.ensure_dir(config['checkpoints_dir'])
+    checkpoints_dir = utils.ensure_dir(args.checkpoints_dir)
 
     # training device
     device = xm.xla_device()
     device_hw = xm.xla_device_hw(device)
 
-    matmul_precision = config.get('matmul_precision', 'highest')
-    torch.set_float32_matmul_precision(matmul_precision)
-    print(f'Set float32 matmul precision to {matmul_precision}')
+    torch.set_float32_matmul_precision(args.matmul_precision)
+    print(f'Set float32 matmul precision to {args.matmul_precision}')
 
-    if config['train_batch_size'] % xr.world_size() != 0:
+    if args.train_batch_size % xr.world_size() != 0:
         raise ValueError('train_batch_size must be divisible by world_size')
-    if config['eval_batch_size'] % xr.world_size() != 0:
+    if args.eval_batch_size % xr.world_size() != 0:
         raise ValueError('eval_batch_size must be divisible by world_size')
-    train_batch_size = config['train_batch_size'] // xr.world_size()
-    eval_batch_size = config['eval_batch_size'] // xr.world_size()
+    train_batch_size = args.train_batch_size // xr.world_size()
+    eval_batch_size = args.eval_batch_size // xr.world_size()
+    effective_batch_size = train_batch_size * xr.world_size() * args.gradient_accum_step
+    xm.master_print(
+        f'Effective batch size: {effective_batch_size} '
+        f'(micro_batch_size={train_batch_size}, '
+        f'gradient_accum_step={args.gradient_accum_step}, '
+        f'num_devices={xr.world_size()})'
+    )
 
     # dataset
     train_lm_dataset = LMDataset(
-        config['train_dir'],
+        args.train_dir,
         train_batch_size,
-        config['seq_length'],
+        args.seq_length,
         num_replicas=xr.world_size(),
         rank=xr.global_ordinal(),
     )
     validation_lm_dataset = LMDataset(
-        config['valid_dir'],
+        args.valid_dir,
         eval_batch_size,
-        config['seq_length'],
+        args.seq_length,
         num_replicas=xr.world_size(),
         rank=xr.global_ordinal(),
     )
@@ -73,13 +80,13 @@ def train_model(config: dict[str, Any]):
         train_lm_dataset,
         batch_size=1,
         shuffle=False,
-        drop_last=config['drop_last'],
+        drop_last=args.drop_last,
     )
     validation_data_loader = DataLoader(
         validation_lm_dataset,
         batch_size=1,
         shuffle=False,
-        drop_last=config['drop_last'],
+        drop_last=args.drop_last,
     )
 
     # device loader
@@ -89,15 +96,15 @@ def train_model(config: dict[str, Any]):
     # mixed precision training
     # note: AMP only supported for XLA:TPU and XLA:GPU
     mp_dtype = torch.float32
-    if config['mixed_precision'] == 'fp16':
+    if args.mixed_precision == 'fp16':
         mp_dtype = torch.float16
-    elif config['mixed_precision'] == 'bf16':
+    elif args.mixed_precision == 'bf16':
         mp_dtype = torch.bfloat16
-    elif isinstance(config['mixed_precision'], str):
-        raise ValueError(f'Unsupported mixed precision type: {config["mixed_precision"]}')
+    elif isinstance(args.mixed_precision, str):
+        raise ValueError(f'Unsupported mixed precision type: {args.mixed_precision}')
     autocast_context = torch_xla.amp.autocast(
         device,
-        enabled=(mp_dtype in (torch.float16, torch.bfloat16)),
+        enabled=((mp_dtype in (torch.float16, torch.bfloat16)) and device_hw != 'CPU'),
         dtype=mp_dtype,
     )
     autocast_enabled = autocast_context._enabled  # pyright: ignore[reportPrivateUsage]
@@ -108,25 +115,24 @@ def train_model(config: dict[str, Any]):
     scaler = torch_xla.amp.GradScaler(enabled=(mp_dtype == torch.float16 and device_hw != 'TPU'))
 
     # resume from previous checkpoint
-    preload_checkpoint = config['preload_checkpoint']
     saved_states = None
-    if preload_checkpoint is None:
+    if args.from_checkpoint is None:
         gpt_config = GPTConfig(
-            vocab_size=config['vocab_size'],
-            seq_length=config['seq_length'],
-            d_model=config['d_model'],
-            num_layers=config['num_layers'],
-            num_heads=config['num_heads'],
-            d_ff=config['d_ff'],
-            dropout=config['dropout'],
-            activation=config['activation'],
+            vocab_size=args.vocab_size,
+            seq_length=args.seq_length,
+            d_model=args.d_model,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+            d_ff=args.d_ff,
+            dropout=args.dropout,
+            activation=args.activation,
             tie_weights=False,
         )
     else:
-        xm.master_print(f'Loading states from checkpoint {preload_checkpoint}')
+        xm.master_print(f'Loading states from checkpoint {args.from_checkpoint}')
         # model is saved with xm.save() which moves tensors to CPU before saving,
         # so we can safely discard `map_location`.
-        saved_states = torch.load(preload_checkpoint, map_location=None)
+        saved_states = torch.load(args.from_checkpoint, map_location=None)
         required_keys = [
             'model',
             'optimizer',
@@ -140,48 +146,46 @@ def train_model(config: dict[str, Any]):
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         # TODO: check keys that do not require configuration match
         gpt_config = GPTConfig(**saved_states['config'])
-        config['tie_weights'] = config['tie_weights'] & gpt_config.tie_weights
+        args.tie_weights = args.tie_weights & gpt_config.tie_weights
         gpt_config.tie_weights = False
 
     model = GPT(gpt_config, device=device)
     model.to(device)
     # tie_weights must be called after moving to device if we are on XLA device,
     # otherwise it will be treated as separate Tensors.
-    if config['tie_weights']:
-        gpt_config.tie_weights = config['tie_weights']
+    if args.tie_weights:
+        gpt_config.tie_weights = args.tie_weights
         model.use_tied_weights = True
         model.tie_weights()
     criterion = nn.CrossEntropyLoss()
-    learning_rate = config['optim']['lr']
+    learning_rate = args.learning_rate
     optimizer = utils.make_optimizer(
         model,
         device,
-        config['optim']['type'],
+        args.optim_type,
         lr=learning_rate,
-        betas=config['optim']['betas'],
-        eps=config['optim']['eps'],
-        weight_decay=config['optim']['weight_decay'],
-        use_syncfree_optim=autocast_enabled and config['use_syncfree_optim'],
+        betas=args.betas,
+        weight_decay=args.weight_decay,
+        use_syncfree_optim=autocast_enabled and args.use_syncfree_optim,
     )
-    if config['scheduler']['decay_method'] == 'noam':
+    if args.decay_method == 'noam':
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: utils.noam_decay(
-                step, config['d_model'],
-                config['scheduler']['warmup_steps'],
+                step, args.d_model, args.warmup_steps,
             ),
         )
-    elif config['scheduler']['decay_method'] == 'cosine':
+    elif args.decay_method == 'cosine':
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: utils.cosine_decay(
-                step, learning_rate, config['scheduler']['min_lr'],
-                config['scheduler']['warmup_steps'],
-                config['scheduler']['decay_steps'], factor=1/learning_rate,
+                step, learning_rate, args.min_lr,
+                args.warmup_steps,
+                args.decay_steps, factor=1/learning_rate,
             ),
         )
     else:
-        raise ValueError(f'Unsupported scheduler decay method: {config["scheduler"]["decay_method"]}')
+        raise ValueError(f'Unsupported scheduler decay method: {args.decay_method}')
 
     initial_step = 0
     if saved_states is not None:
@@ -203,12 +207,12 @@ def train_model(config: dict[str, Any]):
 
     raw_model = model
     # compile the model
-    if config['compile']:
+    if args.compile:
         xm.master_print('Compiling the model')
         model = torch.compile(model, backend='openxla' if device.type == 'xla' else 'inductor')
 
     # wrap the model with DDP
-    if config['ddp']:
+    if args.ddp:
         model = DDP(
             model,
             device_ids=[xr.local_ordinal()],
@@ -219,34 +223,26 @@ def train_model(config: dict[str, Any]):
 
     # logging with wandb
     wandb_run = None
-    wandb_config = config['wandb']
-    if xm.is_master_ordinal() and wandb_config['logging']:
+    if xm.is_master_ordinal() and args.wandb_logging:
         wandb_run = wandb.init(
-            project=wandb_config['project'],
-            name=wandb_config['name'],
-            config=config,
-            tags=wandb_config.get('tags', None),
-            notes=wandb_config.get('notes', None),
-            id=wandb_config.get('resume_id', None),
-            resume='must' if wandb_config.get('resume_id', None) is not None else None,
+            project=args.wandb_project,
+            name=args.wandb_name,
+            config=vars(args),
+            tags=args.wandb_tags,
+            notes=args.wandb_notes,
+            id=args.wandb_resume_id,
+            resume='must' if args.wandb_resume_id is not None else None,
         )
 
     # training loop
-    train_steps = config['train_steps']
-    valid_steps = config['valid_steps']
-    valid_interval = config['valid_interval']
-    save_interval = config['save_interval']
-    gradient_accum_step = config['gradient_accum_step']
-
     global_step = initial_step
     batch_loss = 0.0
     wandb_accum_logs: list[dict[str, Any]] = []
     running_loss = XLAAverageMeter('running_losses', device=device)
-    wandb_logging_interval = config['wandb']['logging_interval']
 
     xm.master_print(f'Model has {utils.count_model_param(raw_model) / 10 ** 6:0.2f}M parameters')
     train_iter = tqdm(
-        range(initial_step, train_steps),
+        range(initial_step, args.train_steps),
         desc=f'{device_hw}:{xr.global_ordinal()} - Training model',
         disable=xr.local_ordinal() != 0,
         ncols=120,
@@ -255,7 +251,7 @@ def train_model(config: dict[str, Any]):
     # set model in training mode
     model.train()
     optimizer.zero_grad()
-    while global_step < train_steps:
+    while global_step < args.train_steps:
         for batch_idx, (input_ids, labels) in enumerate(train_device_loader):
             if input_ids.dim() == 3:
                 assert input_ids.shape[0] == 1
@@ -264,27 +260,27 @@ def train_model(config: dict[str, Any]):
                 assert labels.shape[0] == 1
                 labels = labels[0]
 
-            if config['ddp']:
+            if args.ddp:
                 # we only sync gradients at the last step of gradient accumulation
                 # we can use the below trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
-                model.require_backward_grad_sync = (batch_idx + 1) % gradient_accum_step == 0
+                model.require_backward_grad_sync = (batch_idx + 1) % args.gradient_accum_step == 0
 
             with autocast_context:
                 logits = model(input_ids)
                 loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
 
-            if gradient_accum_step > 1:
-                loss /= gradient_accum_step
+            if args.gradient_accum_step > 1:
+                loss /= args.gradient_accum_step
             batch_loss += loss.detach()
 
             scaler.scale(loss).backward()
 
-            if (batch_idx + 1) % gradient_accum_step == 0:
-                if not config['ddp']:
+            if (batch_idx + 1) % args.gradient_accum_step == 0:
+                if not args.ddp:
                     xm.reduce_gradients(optimizer)
-                if config['max_grad_norm'] > 0:
+                if args.max_grad_norm > 0:
                     scaler.unscale_(optimizer)
-                    nn.utils.clip_grad_norm_(model.parameters(), max_norm=config['max_grad_norm'])
+                    nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
 
                 scaler.step(optimizer)
                 scaler.update()
@@ -302,14 +298,14 @@ def train_model(config: dict[str, Any]):
                 lr_scheduler.step()
                 running_loss.update(batch_loss)
 
-                if (global_step + 1) % valid_interval == 0:
+                if (global_step + 1) % args.valid_interval == 0:
                     xm.rendezvous('all_reduce_running_loss')
                     running_loss.all_reduce()
                     valid_results = eval_model(
                         model,
                         criterion,
                         validation_device_loader,
-                        valid_steps,
+                        args.valid_steps,
                         autocast_context,
                     )
                     wandb_accum_logs[-1].update({
@@ -319,8 +315,8 @@ def train_model(config: dict[str, Any]):
                     running_loss.reset()
 
                 if (
-                    len(wandb_accum_logs) >= wandb_logging_interval or
-                    (len(wandb_accum_logs) > 0 and global_step + 1 >= train_steps)
+                    len(wandb_accum_logs) >= args.wandb_logging_interval or
+                    (len(wandb_accum_logs) > 0 and global_step + 1 >= args.train_steps)
                 ):
                     batch_loss_values = [loss['loss/batch_loss'] for loss in wandb_accum_logs]
                     xm.rendezvous('all_reduce_batch_loss')
@@ -334,7 +330,7 @@ def train_model(config: dict[str, Any]):
                     wandb_accum_logs = []
                     xm.rendezvous('exit_wandb_logging')
 
-                if (global_step + 1) % save_interval == 0:
+                if (global_step + 1) % args.save_interval == 0:
                     if xm.is_master_ordinal():
                         checkpoint_dict = {
                             'model': raw_model.state_dict(),
@@ -346,9 +342,9 @@ def train_model(config: dict[str, Any]):
                         if scaler.is_enabled():
                             checkpoint_dict['scaler'] = scaler.state_dict()
                         utils.ensure_num_saved_checkpoints(
-                            checkpoints_dir=config['checkpoints_dir'],
+                            checkpoints_dir=args.checkpoints_dir,
                             model_basename='gpt2',
-                            limit=config['saved_checkpoint_limit'],
+                            limit=args.saved_checkpoint_limit,
                         )
                         model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
                         xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=True)
@@ -360,28 +356,22 @@ def train_model(config: dict[str, Any]):
                 batch_loss = 0.0
                 global_step += 1
                 train_iter.update()
-                if global_step >= train_steps:
+                if global_step >= args.train_steps:
                     break
 
-def _mp_fn(index: int, config: dict[str, Any]) -> None:
+def _mp_fn(index: int, args: argparse.Namespace) -> None:
     dist.init_process_group(backend='xla', init_method='xla://')
-    train_model(config)
+    train_model(args)
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='Train GPT2 model',
+        description='Run pre-training GPT2 model with XLA',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument(
-        '-c',
-        '--config',
-        help='Path to the config file',
-        default='./config/config.yaml',
-    )
+    opts.add_run_pretrain_xla_opts(parser)
     args = parser.parse_args()
-    config = utils.load_yaml_config(args.config)
 
-    xmp.spawn(_mp_fn, args=(config,), start_method=config['mp_start_method'])
+    xmp.spawn(_mp_fn, args=(args,), start_method=args.mp_start_method)
 
 @torch.no_grad()
 def eval_model(

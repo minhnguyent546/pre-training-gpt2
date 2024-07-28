@@ -70,9 +70,6 @@ class AverageMeterBase:
     def to_dict(self) -> dict[str, Any]:
         return vars(self)
 
-    def _is_xla_device(self) -> bool:
-        return self.device is not None and self.device.type == 'xla'
-
 class AverageMeter(AverageMeterBase):
     """
     A class for working with average meters.
@@ -126,7 +123,7 @@ class XLAAverageMeter(AverageMeterBase):
         count: int = 0,
         device: torch.device | None = None,
     ) -> None:
-        if device is not None and not self._is_xla_device():
+        if device is not None and not utils.is_xla_device(device):
             raise ValueError(f'Expected device is an XLA device if provided, found {device.type}')
         if device is None:
             device = xm.xla_device()

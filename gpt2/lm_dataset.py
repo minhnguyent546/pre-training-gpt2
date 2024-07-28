@@ -50,7 +50,7 @@ class LMDataset(IterableDataset):  # pyright: ignore[reportMissingTypeArgument]
                     labels[:num_remain_tokens] = self.shard[self.ptr + 1:]
                     num_tokens_to_fill -= num_remain_tokens
                 self.ptr = 0
-                if self._load_next_shard() == False:
+                if not self._load_next_shard():
                     raise StopIteration
 
             # assume each shard contains no less than `num_tokens_to_fill + 1` tokens

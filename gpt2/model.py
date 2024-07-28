@@ -27,7 +27,7 @@ def scaled_dot_product_attention(
     d_k = query.size(-1)
     attention_probs = (query @ key.transpose(-2, -1)) / math.sqrt(d_k)
     if mask is not None:
-        attention_probs.masked_fill_(mask == False, float('-inf'))
+        attention_probs.masked_fill_(mask == False, float('-inf'))  # noqa: E712
 
     attention_probs = Fun.softmax(attention_probs, dim=-1)
     if dropout is not None:
