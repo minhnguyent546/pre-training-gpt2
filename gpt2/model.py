@@ -165,7 +165,7 @@ class GPT(nn.Module):
         self.pe_dropout = nn.Dropout(self.config.dropout)
         self.decoder_blocks = nn.Sequential(*[GPTDecoderBlock(self.config) for _ in range(self.config.num_layers)])
         self.layer_norm = LayerNorm(self.config.d_model, eps=self.config.eps)  # additional layer normalization
-        self.lm_head = nn.Linear(self.config.d_model, self.config.vocab_size)
+        self.lm_head = nn.Linear(self.config.d_model, self.config.vocab_size, bias=False)
 
         self.post_init()
 
