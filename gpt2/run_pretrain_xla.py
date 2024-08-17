@@ -257,7 +257,7 @@ def train_model(args: argparse.Namespace):
 
     # logging with wandb
     wandb_run = None
-    if xm.is_master_ordinal() and args.wandb_logging:
+    if xm.is_master_ordinal(local=False) and args.wandb_logging:
         wandb_run = wandb.init(
             project=args.wandb_project,
             name=args.wandb_name,
@@ -367,7 +367,7 @@ def train_model(args: argparse.Namespace):
                     xm.rendezvous('exit_wandb_logging')
 
                 if (global_step + 1) % args.save_interval == 0:
-                    if xm.is_master_ordinal():
+                    if xm.is_master_ordinal(local=True):
                         checkpoint_dict = {
                             'model': raw_model.state_dict(),
                             'optimizer': optimizer.state_dict(),
@@ -383,7 +383,7 @@ def train_model(args: argparse.Namespace):
                             limit=args.saved_checkpoint_limit,
                         )
                         model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
-                        xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=True)
+                        xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=False)
                     xm.rendezvous('save_checkpoint')
 
                 train_iter.set_postfix({
