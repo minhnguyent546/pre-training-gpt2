@@ -2,7 +2,13 @@ numpy==1.26.4
 PyYAML==6.0.1
 regex==2024.5.15
 tokenizers==0.19.1
-torch==2.3.1
+torch==2.3.0
 tqdm==4.66.3
 datasets==2.20.0
 wandb==0.17.4
+tiktoken==0.7.0
+
+# for training with XLA
+https://storage.googleapis.com/libtpu-nightly-releases/wheels/libtpu-nightly/libtpu_nightly-0.1.dev20240322+default-py3-none-any.whl
+https://storage.googleapis.com/pytorch-xla-releases/wheels/cuda/12.1/torch_xla_cuda_plugin-2.3.0-py3-none-any.whl
+torch_xla[tpu]==2.3.0
