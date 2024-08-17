@@ -1,4 +1,5 @@
 import glob
+import io
 import math
 import os
 import random
@@ -9,9 +10,16 @@ from typing import Any
 
 import numpy as np
 
+from pickle import Pickler, Unpickler
+
 import torch
+import torch.nn as nn
 import torch.nn.functional as Fun
 from torch import Tensor
+
+if 'PJRT_DEVICE' in os.environ:
+    import torch_xla as xla  # noqa: F401
+    import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
 
 
 def set_seed(seed: int = 0x3f3f3f3f):
@@ -60,14 +68,18 @@ def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
+def is_xla_device(device: torch.device | None) -> bool:
+    return device is not None and device.type == 'xla'
+
 def make_optimizer(
     model,
+    device: torch.device,
     optim_type: str,
     lr: float,
     betas: tuple[float, float] = (0.9, 0.999),
     eps: float = 1e-8,
     weight_decay: float = 0.0,
-    device: torch.device | None = None,
+    use_syncfree_optim: bool = False,
 ) -> torch.optim.Optimizer:
     param_list = [param for param in model.parameters() if param.requires_grad]
     decay_params = [param for param in param_list if param.dim() >= 2]
@@ -77,11 +89,13 @@ def make_optimizer(
         {'params': no_decay_params, 'weight_decay': 0.0},
     ]
     optim_type = optim_type.lower()
-    use_fused_impl = device is not None and device.type == 'cuda'
+    use_fused_impl = device.type == 'cuda'
     if optim_type == 'adam':
-        optimizer = torch.optim.Adam(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
+        adam_optim = syncfree.Adam if use_syncfree_optim else torch.optim.Adam
+        optimizer = adam_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
     elif optim_type == 'adamw':
-        optimizer = torch.optim.AdamW(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
+        adamw_optim = syncfree.AdamW if use_syncfree_optim else torch.optim.AdamW
+        optimizer = adamw_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
     else:
         raise ValueError(f'Unsupported optimizer type: {optim_type}. Possible values are: adam, adamw')
 
@@ -198,3 +212,27 @@ def ensure_num_saved_checkpoints(
     checkpoints = sorted(checkpoints, key=lambda x: int(x.split('-')[-1][:-3]))
     for cp in checkpoints[:-limit]:
         os.remove(cp)
+
+def count_model_param(model: nn.Module) -> int:
+    return sum(param.numel() for param in model.parameters() if param.requires_grad)
+
+def object_to_tensor(obj, device, group=None):
+    """Modified from `torch/distributed/distributed_c10d.py`."""
+    f = io.BytesIO()
+    Pickler(f).dump(obj)
+    byte_storage = torch.ByteStorage._from_buffer(f.getvalue())  # type: ignore[attr-defined]
+    # Do not replace `torch.ByteTensor` or `torch.LongTensor` with torch.tensor and specifying dtype.
+    # Otherwise, it will casue 100X slowdown.
+    # See: https://github.com/pytorch/pytorch/issues/65696
+    byte_tensor = torch.ByteTensor(byte_storage).to(device)
+    local_size = torch.LongTensor([byte_tensor.numel()]).to(device)
+    return byte_tensor, local_size
+
+def tensor_to_object(tensor, tensor_size, group=None):
+    """Modified from `torch/distributed/distributed_c10d.py`."""
+    tensor = tensor.cpu()
+    buf = tensor.numpy().tobytes()[:tensor_size]
+    return Unpickler(io.BytesIO(buf)).load()
+
+def get_perplexity(loss: float) -> float:
+    return math.exp(loss)

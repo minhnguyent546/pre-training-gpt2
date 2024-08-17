@@ -5,6 +5,7 @@ seed: 1061109567
 # datastet
 train_dir: fineweb_edu/train
 valid_dir: fineweb_edu/valid
+drop_last: false
 
 # model
 vocab_size: 50304 # a bit larger than the default GPT-2 vocab size (50257) but much nicer
@@ -22,13 +23,15 @@ wandb:
   logging: true
   project: pre-training-gpt2
   name: base
+  logging_interval: 500 # time between syncing to wandb
   resume_id: null
   notes: null
   tags: null
 
 # training
+do_test: false
 ddp_backend: nccl # nccl, gloo, etc
-compile: true # whether to compile the model (for faster training)
+compile: false # whether to compile the model (for faster training)
 matmul_precision: highest # see: https://pytorch.org/docs/2.3/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
 optim:
   type: adamw # possible values are: adam, adamw
@@ -53,4 +56,10 @@ valid_interval: 3_000
 save_interval: 4_000
 saved_checkpoint_limit: 10
 max_grad_norm: 1.0
-preload_checkpoint: null
+from_checkpoint: null
+
+# training on xla device
+xla_one_core: false
+mp_start_method: fork
+ddp: false
+use_syncfree_optim: true # use sync-free optimizer for AMP

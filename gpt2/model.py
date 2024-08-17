@@ -4,6 +4,7 @@ references:
   official GPT-2 implementation: https://github.com/openai/gpt-2/blob/master/src/model.py
   nanoGPT implementation: https://github.com/karpathy/nanoGPT
 """
+from __future__ import annotations
 
 import math
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ def scaled_dot_product_attention(
     d_k = query.size(-1)
     attention_probs = (query @ key.transpose(-2, -1)) / math.sqrt(d_k)
     if mask is not None:
-        attention_probs.masked_fill_(mask == False, float('-inf'))
+        attention_probs.masked_fill_(mask == False, float('-inf'))  # noqa: E712
 
     attention_probs = Fun.softmax(attention_probs, dim=-1)
     if dropout is not None:
@@ -43,7 +44,7 @@ def get_activation(act_type: str) -> nn.Module:
     if act_type == 'relu':
         return nn.ReLU()
     elif act_type == 'gelu':
-        return nn.GELU()
+        return nn.GELU(approximate='tanh')
     else:
         raise ValueError(f'Unsupported activation function: {act_type}. Possible values are "relu", "gelu".')
 
@@ -58,8 +59,8 @@ def get_device(device: Union[torch.device, str] = 'auto') -> torch.device:
 class LayerNorm(nn.Module):
     def __init__(self, features, eps: float = 1e-7):
         super().__init__()
-        self.gamma = nn.Parameter(torch.ones(features))
-        self.beta = nn.Parameter(torch.zeros(features))
+        self.weight = nn.Parameter(torch.ones(features))
+        self.bias = nn.Parameter(torch.zeros(features))
         self.eps = eps
 
     def forward(self, x: Tensor) -> Tensor:
@@ -67,7 +68,7 @@ class LayerNorm(nn.Module):
         var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
         std = (var + self.eps).sqrt()
         y = (x - mean) / std
-        output = self.gamma * y + self.beta
+        output = self.weight * y + self.bias
         return output
 
 class CausalMultiHeadSelfAttention(nn.Module):
@@ -80,9 +81,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
         self.d_k = self.d_model // self.num_heads
         self.attention_dropout = nn.Dropout(dropout)
         self.residual_dropout = nn.Dropout(dropout)
-        self.w_q = nn.Linear(d_model, d_model)
-        self.w_k = nn.Linear(d_model, d_model)
-        self.w_v = nn.Linear(d_model, d_model)
+        self.w_qkv = nn.Linear(d_model, d_model * 3)
         self.rl_projection = nn.Linear(d_model, d_model)
         self.register_buffer(
             'causal_mask',
@@ -93,9 +92,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
         batch_size, seq_length, _ = x.size()
         mask = self.causal_mask[..., :seq_length, :seq_length]
 
-        q = self.w_q(x)
-        k = self.w_k(x)
-        v = self.w_v(x)
+        q, k, v = self.w_qkv(x).split(self.d_model, dim=-1)
 
         # q, k, v: (batch_size, seq_length, d_model) -> (batch_size, num_heads, seq_length, d_k)
         q = q.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
@@ -124,13 +121,13 @@ class PositionWiseFeedForward(nn.Module):
 
 @dataclass
 class GPTConfig:
-    vocab_size: int = 30_000
-    seq_length: int = 512
+    vocab_size: int = 50257
+    seq_length: int = 1024
     d_model: int = 768
     num_layers: int = 12
     num_heads: int = 12
     d_ff: int = 3072
-    dropout: float = 0.1
+    dropout: float = 0.0
     eps: float = 1e-7
     activation: str = 'gelu'
     tie_weights: bool = True
@@ -160,44 +157,40 @@ class GPTDecoderBlock(nn.Module):
         return x
 
 class GPT(nn.Module):
-    def __init__(self, config: GPTConfig, device: Union[torch.device, str] = 'auto'):
+    def __init__(self, config: GPTConfig):
         super().__init__()
         self.config = config
         self.token_embedding = nn.Embedding(self.config.vocab_size, self.config.d_model)
         self.positional_embedding = nn.Embedding(self.config.seq_length, self.config.d_model)
-        self.dropout = nn.Dropout(self.config.dropout)
+        self.pe_dropout = nn.Dropout(self.config.dropout)
         self.decoder_blocks = nn.Sequential(*[GPTDecoderBlock(self.config) for _ in range(self.config.num_layers)])
         self.layer_norm = LayerNorm(self.config.d_model, eps=self.config.eps)  # additional layer normalization
-        self.last_linear = nn.Linear(self.config.d_model, self.config.vocab_size)
-        self.device = get_device(device)
-        self._use_tied_weights = config.tie_weights
+        self.lm_head = nn.Linear(self.config.d_model, self.config.vocab_size, bias=False)
 
         self.post_init()
 
     def forward(self, ids: Tensor) -> Tensor:
         batch_size, seq_length = ids.size()
         token_embeddings = self.token_embedding(ids)
-        pos = torch.arange(0, seq_length, dtype=torch.int32, device=self.device)
+        pos = torch.arange(0, seq_length, dtype=torch.int64, device=ids.device)
         pos_embeddings = self.positional_embedding(pos)
-        x = self.dropout(token_embeddings + pos_embeddings)
+        x = self.pe_dropout(token_embeddings + pos_embeddings)
         x = self.decoder_blocks(x)
         x = self.layer_norm(x)
-        logits = self.last_linear(x)  # (batch_size, seq_length, vocab_size)
+        logits = self.lm_head(x)  # (batch_size, seq_length, vocab_size)
         return logits
 
     def post_init(self) -> None:
         self._init_model_weights()
-        if self._use_tied_weights:
-            self._tie_weights()
 
-    def _tie_weights(self) -> None:
-        if self.last_linear.weight.shape != self.token_embedding.weight.shape:
-            raise ValueError(
+    def tie_weights(self) -> None:
+        if self.lm_head.weight.shape != self.token_embedding.weight.shape:
+            raise RuntimeError(
                 'When using tied weights, the weight of the last linear layer '
                 'and the token embedding layer must be the same shape, '
-                f'but found {self.last_linear.weight.shape} and {self.token_embedding.weight.shape}'
+                f'but found {self.lm_head.weight.shape} and {self.token_embedding.weight.shape}'
             )
-        self.last_linear.weight = self.token_embedding.weight
+        self.lm_head.weight = self.token_embedding.weight
 
     def _init_model_weights(self, std: float = 0.02) -> None:
         self.apply(lambda module: self._init_weights(module, std=std))
@@ -218,6 +211,77 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+
+    @classmethod
+    def from_pretrained(cls, checkpoint: str, config: GPTConfig) -> GPT:
+        hf_to_local_map = {
+            'transformer.wte.weight'                : 'token_embedding.weight',
+            'transformer.wpe.weight'                : 'positional_embedding.weight',
+            'transformer.h.{}.ln_1.weight'          : 'decoder_blocks.{}.layer_norm_1.weight',
+            'transformer.h.{}.ln_1.bias'            : 'decoder_blocks.{}.layer_norm_1.bias',
+            'transformer.h.{}.attn.c_attn.weight'   : 'decoder_blocks.{}.causal_self_attention.w_qkv.weight',
+            'transformer.h.{}.attn.c_attn.bias'     : 'decoder_blocks.{}.causal_self_attention.w_qkv.bias',
+            'transformer.h.{}.attn.c_proj.weight'   : 'decoder_blocks.{}.causal_self_attention.rl_projection.weight',
+            'transformer.h.{}.attn.c_proj.bias'     : 'decoder_blocks.{}.causal_self_attention.rl_projection.bias',
+            'transformer.h.{}.ln_2.weight'          : 'decoder_blocks.{}.layer_norm_2.weight',
+            'transformer.h.{}.ln_2.bias'            : 'decoder_blocks.{}.layer_norm_2.bias',
+            'transformer.h.{}.mlp.c_fc.weight'      : 'decoder_blocks.{}.position_wise_ffn.linear.weight',
+            'transformer.h.{}.mlp.c_fc.bias'        : 'decoder_blocks.{}.position_wise_ffn.linear.bias',
+            'transformer.h.{}.mlp.c_proj.weight'    : 'decoder_blocks.{}.position_wise_ffn.rl_projection.weight',
+            'transformer.h.{}.mlp.c_proj.bias'      : 'decoder_blocks.{}.position_wise_ffn.rl_projection.bias',
+            'transformer.ln_f.weight'               : 'layer_norm.weight',
+            'transformer.ln_f.bias'                 : 'layer_norm.bias',
+            'lm_head.weight'                        : 'lm_head.weight',
+        }
+        checkpoint_config_map = {
+            'openai-community/gpt2': dict(vocab_size=50257, seq_length=1024, d_model=768, num_layers=12, num_heads=12, d_ff=3072),  # num_params: 124439808
+            'openai-community/gpt2-medium': dict(vocab_size=50257, seq_length=1024, d_model=1024, num_layers=24, num_heads=16, d_ff=4096),  # num_params: 354823168
+            'openai-community/gpt2-large': dict(vocab_size=50257, seq_length=1024, d_model=1280, num_layers=36, num_heads=20, d_ff=5120),  # num_params: 774030080
+            'openai-community/gpt2-xl': dict(vocab_size=50257, seq_length=1024, d_model=1600, num_layers=48, num_heads=25, d_ff=6400),  # num_params: 1557611200
+        }
+        from transformers import GPT2LMHeadModel
+
+        if not checkpoint.startswith('openai-community/'):
+            checkpoint = 'openai-community/' + checkpoint
+        checkpoint_config = checkpoint_config_map[checkpoint]
+        hf_model = GPT2LMHeadModel.from_pretrained(checkpoint)
+        hf_state_dict = hf_model.state_dict()
+        conv1ds = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+
+        # override default keys of checkpoint in config
+        for key, value in checkpoint_config.items():
+            setattr(config, key, value)
+        model = GPT(config)
+        # openai gpt2 models do not have bias in lm_head
+        model.lm_head.bias = None
+        state_dict = model.state_dict()
+        loaded_params = set(state_dict.keys())
+        for name in state_dict.keys():
+            if name.endswith('.causal_mask'):
+                # just a buffer, can be ignored
+                loaded_params.remove(name)
+        for name, param in hf_state_dict.items():
+            if name.startswith('transformer.h.'):
+                splitted_name = name.split('.')
+                layer_idx = int(splitted_name[2])
+                splitted_name[2] = '{}'
+                name = '.'.join(splitted_name)
+                local_name = hf_to_local_map[name].format(layer_idx)
+            else:
+                local_name = hf_to_local_map[name]
+
+            if any(conv1d in name for conv1d in conv1ds):
+                # HF Conv1D works like a linear layer but the weights are transposed
+                param = torch.t(param)
+            assert state_dict[local_name].shape == param.shape
+            state_dict[local_name] = param
+            loaded_params.remove(local_name)
+
+        if len(loaded_params) > 0:
+            print(f'Warning: parameters that are not loaded: {loaded_params}')
+
+        model.load_state_dict(state_dict)
+        return model
 
     @torch.no_grad()
     def generate(
@@ -263,3 +327,18 @@ class GPT(nn.Module):
             self.train()
 
         return ids
+
+    def truncate_seq_length(self, seq_length: int) -> None:
+        if seq_length > self.config.seq_length:
+            raise ValueError(
+                'Unable to truncate seq_length. The value to truncate to cannot be '
+                f'larger than the current value {self.config.seq_length}'
+            )
+        if seq_length == self.config.seq_length:
+            return
+        self.config.seq_length = seq_length
+        self.positional_embedding.weight = nn.Parameter(self.positional_embedding.weight[:seq_length, :])
+        self.positional_embedding.num_embeddings = seq_length
+        for block in self.decoder_blocks:
+            if hasattr(block.causal_self_attention, 'causal_mask'):
+                block.causal_self_attention.causal_mask = block.causal_self_attention.causal_mask[:, :, :seq_length, :seq_length]
