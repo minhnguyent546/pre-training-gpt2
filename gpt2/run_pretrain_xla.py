@@ -395,6 +395,27 @@ def train_model(args: argparse.Namespace):
                 if global_step >= args.train_steps:
                     break
 
+        # also save the model at the last step
+        if global_step == args.train_steps and args.train_steps % args.save_interval != 0:
+            if xm.is_master_ordinal(local=True):
+                checkpoint_dict = {
+                    'model': raw_model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'config': vars(gpt_config),
+                    'global_step': global_step + 1,
+                }
+                if scaler.is_enabled():
+                    checkpoint_dict['scaler'] = scaler.state_dict()
+                utils.ensure_num_saved_checkpoints(
+                    checkpoints_dir=args.checkpoints_dir,
+                    model_basename='gpt2',
+                    limit=args.saved_checkpoint_limit,
+                )
+                model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step}.pt')
+                xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=False)
+            xm.rendezvous('save_checkpoint')
+
 def _mp_fn(index: int, args: argparse.Namespace) -> None:
     dist.init_process_group(backend='xla', init_method='xla://')
     train_model(args)

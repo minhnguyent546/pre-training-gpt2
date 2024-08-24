@@ -374,6 +374,27 @@ def train_model(args: argparse.Namespace) -> None:
                 if global_step >= args.train_steps:
                     break
 
+        # also save the model at the last step
+        if global_step == args.train_steps and args.train_steps % args.save_interval != 0:
+            if args.is_master:
+                checkpoint_dict = {
+                    'model': raw_model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'config': vars(gpt_config),
+                    'global_step': global_step + 1,
+                }
+                if scaler.is_enabled():
+                    checkpoint_dict['scaler'] = scaler.state_dict()
+                utils.ensure_num_saved_checkpoints(
+                    args.checkpoints_dir,
+                    'gpt2',
+                    args.saved_checkpoint_limit,
+                )
+                model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step}.pt')
+                torch.save(checkpoint_dict, model_save_path)
+            dist.barrier()
+
 def main():
     parser = argparse.ArgumentParser(
         description='Run pre-training GPT2 model',
