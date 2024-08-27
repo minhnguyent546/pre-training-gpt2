@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# torch_xla for CUDA
+https://storage.googleapis.com/pytorch-xla-releases/wheels/cuda/12.1/torch_xla_cuda_plugin-2.3.0-py3-none-any.whl
+torch_xla==2.3.0

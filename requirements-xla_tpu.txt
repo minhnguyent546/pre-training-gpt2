@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# torch_xla for TPU
+https://storage.googleapis.com/libtpu-nightly-releases/wheels/libtpu-nightly/libtpu_nightly-0.1.dev20240322+default-py3-none-any.whl
+torch_xla[tpu]==2.3.0
