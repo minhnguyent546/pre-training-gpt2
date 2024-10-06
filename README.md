@@ -38,7 +38,7 @@ python scripts/prepare_fineweb.py \
     --num-workers 4
 ```
 
-You will need approximately 80 GiB space on disk to download and process the dataset, plus 20 GiB for tokens files, leading to roughly 100 GiB on total.
+You will need approximately 80 GiB space on disk to download and process the dataset, plus 20 GiB for tokens files, leading to roughly 100 GiB in total.
 
 ### Training
 
@@ -96,7 +96,7 @@ PJRT_DEVICE=TPU python run_pretrain_xla.py
 You can also use GPU with torch_xla:
 ```bash
 export XLA_REGISTER_INSTALLED_PLUGINS=1
-PJRT_DEVICE=CUDA GPU_NUM_DEVICES=2 python run_pretrain_xla.py
+PJRT_DEVICE=CUDA GPU_NUM_DEVICES=2 python run_pretrain_xla.py \
     --mp-start-method spawn  # CUDA devices are not visible across processes when using fork
 ```
 
@@ -154,6 +154,6 @@ Here are some figures from OpenAI's GPT-2 checkpoints:
 | gpt2-large | 774M | 2.888 | 17.96 |
 | gpt2-xl | 1.5B | 2.791 | 16.30 |
 
-The images below describe what the loss curves look like when training base model (124M) from scratch on Fineweb-Edu (10BT subset), the training took about 14 hours on Kaggle's TPUv3-8:
+The images below describe what the loss curves look like when training base model (124M) from scratch on Fineweb-Edu (10BT subset), the training took around 14 hours on Kaggle's TPUv3-8:
 ![batch loss curve](./assets/batch_loss_curve.png)
 ![valid loss curve](./assets/valid_loss_curve.png)
