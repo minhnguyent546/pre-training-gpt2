@@ -1,0 +1,77 @@
+[project]
+name = "pre-training-gpt2"
+version = "0.1.0"
+description = "Pre-training GPT-2 model from scratch using GPUs and TPUs."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26.4,>=1.27.0",
+    "PyYAML>=6.0.1",
+    "regex>=2024.5.15",
+    "tokenizers>=0.19.1",
+    "torch>=2.3.0,<2.4.0",
+    "tqdm>=4.66.3",
+    "datasets>=2.20.0",
+    "wandb>=0.17.4",
+    "tiktoken>=0.7.0",
+]
+
+[project.optional-dependencies]
+xla-cuda = [
+    "torch_xla==2.3.0",
+    "torch_xla_cuda_plugin @ https://storage.googleapis.com/pytorch-xla-releases/wheels/cuda/12.1/torch_xla_cuda_plugin-2.3.0-py3-none-any.whl",
+]
+xla-tpu = [
+    "torch_xla[tpu]==2.3.0",
+    "libtpu_nightly @ https://storage.googleapis.com/libtpu-nightly-releases/wheels/libtpu-nightly/libtpu_nightly-0.1.dev20240322+default-py3-none-any.whl",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.10",
+]
+
+[tool.ruff]
+line-length = 99
+target-version = "py310"
+exclude = [
+    "./thirdparty/",
+    "./notebooks/",
+]
+
+[tool.ruff.lint]
+select = [
+    "B",      # flake8-bugbear
+    "C",      # comple-structure
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort
+    "W",      # pycodestyle warnings
+    "RUF013", # implicit-optional
+    "UP006",  # non-pep585-annotation (e.g. `list[int]` instead of `List[int]`)
+]
+extend-safe-fixes = ["UP006"]
+ignore = [
+    "C901", # complex-structure
+    "E101", # mixed-spaces-and-tabs
+    "E501", # line-too-long
+    "E741", # ambiguous-variable-name
+    "F402", # import-shadowed-by-loop-var
+    "F823", # undefined-local
+]
+
+[tool.ruff.lint.isort]
+known-third-party = ["wandb"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = [
+    "E402", # module-import-not-at-top-of-file
+    "F401", # unused-import
+    "F403", # undefined-local-with-import-star
+]
+
+[tool.ruff.format]
+preview = true
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

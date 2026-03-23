@@ -1,9 +1,13 @@
 # python stuff
 __pycache__
 .ipynb_checkpoints
+/notebooks
 
 # local files
 _*
 !__init__.py
 /config/config-local.yaml
 /wandb
+.venv*
+/TODO.md
+/gpt2/draft.py
