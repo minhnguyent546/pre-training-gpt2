@@ -203,7 +203,7 @@ def train_model(args: argparse.Namespace) -> None:
     if args.compile:
         if args.is_master:
             print('Compiling the model')
-        model = torch.compile(model)
+        model = torch.compile(model, dynamic=False, fullgraph=True)
 
     # convert the model to distributed data parallel
     if args.ddp_enabled:

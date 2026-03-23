@@ -229,7 +229,7 @@ def train_model(args: argparse.Namespace):
     # compile the model
     if args.compile:
         xm.master_print('Compiling the model')
-        model = torch.compile(model, backend='openxla' if device.type == 'xla' else 'inductor')
+        model = torch.compile(model, backend='openxla' if device.type == 'xla' else 'inductor', dynamic=False, fullgraph=True)
 
     # wrap the model with DDP
     if args.ddp:
