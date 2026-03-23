@@ -311,7 +311,7 @@ def train_model(args: argparse.Namespace):
                 labels = labels[0]
 
             # TODO: assume padding token id is -100, replace with actual padding token id if different
-            num_items_in_batch += (labels != -100).sum().item()
+            num_items_in_batch += (labels != -100).sum()
             batches.append((input_ids, labels))
 
         if len(batches) == 0:
@@ -345,9 +345,7 @@ def train_model(args: argparse.Namespace):
                 max_norm=args.max_grad_norm,
                 norm_type=2,
             )
-            if not bool(torch.isinf(grad_norm_value)) and not bool(torch.isnan(grad_norm_value)):
-                grad_norm_value = grad_norm_value.item()
-            else:
+            if bool(torch.isinf(grad_norm_value)) or bool(torch.isnan(grad_norm_value)):
                 grad_norm_value = 0.0
 
         scaler.step(optimizer)
