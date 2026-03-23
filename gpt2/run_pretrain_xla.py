@@ -304,7 +304,7 @@ def train_model(args: argparse.Namespace):
                 labels = labels[0]
 
             # TODO: assume padding token id is -100, replace with actual padding token id if different
-            num_items_in_batch += torch.count_nonzero(labels != -100).item()
+            num_items_in_batch += (labels != -100).sum().item()
             batches.append((input_ids, labels))
 
             if (batch_idx + 1) % args.gradient_accum_step == 0:
