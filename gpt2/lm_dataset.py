@@ -69,7 +69,7 @@ class LMDataset(IterableDataset):  # pyright: ignore[reportMissingTypeArgument]
         self.shard_idx = self.shard_idx + 1
         if self.shard_idx >= len(self.shard_files):
             return False
-        self.shard = np.load(self.shard_files[self.shard_idx])
+        self.shard = np.load(self.shard_files[self.shard_idx], mmap_mode='r')
         return True
 
     def _normalize_ptr(self) -> None:
