@@ -171,7 +171,9 @@ def train_model(args: argparse.Namespace):
     # otherwise it will be treated as separate Tensors.
     if model.config.tie_weights:
         model.tie_weights()
-    criterion = nn.CrossEntropyLoss()
+
+    criterion = nn.CrossEntropyLoss(reduction="sum")
+    eval_criterion = nn.CrossEntropyLoss()
     learning_rate = args.learning_rate
     optimizer = utils.make_optimizer(
         model,
@@ -249,7 +251,7 @@ def train_model(args: argparse.Namespace):
         valid_results = eval_model(
             model,
             device,
-            criterion,
+            eval_criterion,
             validation_device_loader,
             args.valid_steps,
             autocast_context,
@@ -317,9 +319,7 @@ def train_model(args: argparse.Namespace):
 
             with autocast_context:
                 logits = model(input_ids)
-                loss = criterion(
-                    input=logits.view(-1, logits.size(-1)), target=labels.view(-1), reduction="sum"
-                )
+                loss = criterion(input=logits.view(-1, logits.size(-1)), target=labels.view(-1))
 
                 if num_items_in_batch > 0:
                     loss = loss / num_items_in_batch
@@ -369,7 +369,7 @@ def train_model(args: argparse.Namespace):
                 valid_results = eval_model(
                     model,
                     device,
-                    criterion,
+                    eval_criterion,
                     validation_device_loader,
                     args.valid_steps,
                     autocast_context,
