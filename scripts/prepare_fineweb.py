@@ -90,8 +90,8 @@ def prepare_fineweb_edu(args: argparse.Namespace) -> None:
             progress_bar.write(f'Saved shard {shard_idx} to {file_path}')
 
 def tokenize_example(example: dict[str, Any], tokenizer: tiktoken.Encoding) -> dict[str, Any]:
-    tokens = tokenizer.encode_ordinary(example['text'])
-    tokens.append(tokenizer.eot_token)
+    tokens = [tokenizer.eot_token]
+    tokens.extend(tokenizer.encode_ordinary(example['text']))
     return {
         'tokens': tokens,
         'length': len(tokens),
