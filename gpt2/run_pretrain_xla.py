@@ -356,6 +356,7 @@ def train_model(args: argparse.Namespace):
         })
         wandb_accum_logs[-1].update({
             "loss/batch_loss": batch_loss,
+            "grad_norm": grad_norm_value,
             "step": global_step,
         })
 
@@ -377,7 +378,6 @@ def train_model(args: argparse.Namespace):
             wandb_accum_logs[-1].update({
                 "loss/train": running_loss.average,
                 "loss/valid": valid_results["loss"],
-                "grad_norm": grad_norm_value,
             })
             running_loss.reset()
 
