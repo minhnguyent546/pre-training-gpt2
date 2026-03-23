@@ -292,11 +292,10 @@ def train_model(args: argparse.Namespace):
     optimizer.zero_grad()
     train_loader_iter = iter(train_device_loader)
     while global_step < args.train_steps:
-        batches: list[tuple[torch.Tensor, torch.Tensor]] = []
-        num_items_in_batch = 0
+        num_items_in_batch = torch.tensor(0, device=device)
+        batch_loss = 0.0
 
-        # collect batches
-        for _ in range(args.gradient_accum_step):
+        for batch_idx in range(args.gradient_accum_step):
             try:
                 input_ids, labels = next(train_loader_iter)
             except StopIteration:
@@ -312,34 +311,31 @@ def train_model(args: argparse.Namespace):
 
             # TODO: assume padding token id is -100, replace with actual padding token id if different
             num_items_in_batch += (labels != -100).sum()
-            batches.append((input_ids, labels))
 
-        if len(batches) == 0:
-            break
-
-        batch_loss = 0.0
-        for batch_idx, (input_ids, labels) in enumerate(batches):
             if args.ddp:
                 # we only sync gradients at the last step of gradient accumulation
                 # we can use the below trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
-                model.require_backward_grad_sync = batch_idx + 1 == len(batches)
+                model.require_backward_grad_sync = batch_idx + 1 == args.gradient_accum_step
 
             with autocast_context:
                 logits = model(input_ids)
                 loss = criterion(input=logits.view(-1, logits.size(-1)), target=labels.view(-1))
 
-                if num_items_in_batch > 0:
-                    loss = loss / num_items_in_batch
-
             scaler.scale(loss).backward()
             batch_loss += loss.detach()
+
+        batch_loss = batch_loss / num_items_in_batch
 
         if not args.ddp:
             xm.reduce_gradients(optimizer)
 
+        scaler.unscale_(optimizer)
+        for param in model.parameters():
+            if param.grad is not None:
+                param.grad.div_(num_items_in_batch)
+
         grad_norm_value = 0.0
         if args.max_grad_norm > 0:
-            scaler.unscale_(optimizer)
             grad_norm_value = torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
                 max_norm=args.max_grad_norm,
