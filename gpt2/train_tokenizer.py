@@ -22,10 +22,12 @@ def train_tokenizer(
     lowercase: bool = False,
     show_progress: bool = True,
 ) -> Tokenizer:
-    tokenizer = Tokenizer(tokenizers.models.WordPiece(
-        unk_token='<unk>',
-        max_input_chars_per_word=100,
-    ))  # pyright: ignore[reportCallIssue]
+    tokenizer = Tokenizer(
+        tokenizers.models.WordPiece(
+            unk_token="<unk>",
+            max_input_chars_per_word=100,
+        )
+    )  # pyright: ignore[reportCallIssue]
     # pre-tokenizer
     tokenizer.pre_tokenizer = tokenizers.pre_tokenizers.Whitespace()
 
@@ -38,19 +40,20 @@ def train_tokenizer(
 
     # decoder
     tokenizer.decoder = tokenizers.decoders.WordPiece(
-        prefix='##',
+        prefix="##",
         cleanup=False,
     )
     trainer = tokenizers.trainers.WordPieceTrainer(
         vocab_size=vocab_size - 1,
         min_frequency=min_freq,
         show_progress=show_progress,
-        special_tokens=['<unk>', '<|endoftext|>'],
-        continuing_subword_prefix='##'
+        special_tokens=["<unk>", "<|endoftext|>"],
+        continuing_subword_prefix="##",
     )
     tokenizer.train_from_iterator(data_iter, trainer=trainer)
     tokenizer.add_special_tokens([AddedToken("\n")])
     return tokenizer
+
 
 def build_tokenizer(
     data_files: str | list[str],
@@ -65,7 +68,7 @@ def build_tokenizer(
     data = []
     with mp.Pool(nun_workers) as pool:
         for data_file in data_files:
-            with open(data_file, 'r', encoding='utf-8') as f:
+            with open(data_file, "r", encoding="utf-8") as f:
                 content = pool.map(partial(utils.clean_text, strip=True, keep_punct=True), f)
                 data.extend(content)
 
@@ -75,55 +78,57 @@ def build_tokenizer(
         min_freq=min_freq,
         lowercase=lowercase,
     )
-    print(f'Vocab size: {tokenizer.get_vocab_size()}')
+    print(f"Vocab size: {tokenizer.get_vocab_size()}")
 
     if save_path is not None:
         tokenizer.save(save_path)
-        print(f'Tokenizer saved to {save_path}')
+        print(f"Tokenizer saved to {save_path}")
     return tokenizer
 
+
 def add_opts(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group('Train tokenizer')
+    group = parser.add_argument_group("Train tokenizer")
     group.add_argument(
-        '--data-files',
-        nargs='+',
+        "--data-files",
+        nargs="+",
         required=True,
-        help='Path to the text files contain documents',
+        help="Path to the text files contain documents",
         type=str,
     )
     group.add_argument(
-        '--output',
-        help='Path to save the trained tokenizer',
+        "--output",
+        help="Path to save the trained tokenizer",
         type=str,
-        default='./tokenizer.json',
+        default="./tokenizer.json",
     )
     group.add_argument(
-        '--vocab-size',
-        help='Vocabulary size limit',
+        "--vocab-size",
+        help="Vocabulary size limit",
         type=int,
         default=32_000,
     )
     group.add_argument(
-        '--min-freq',
-        help='Minimum frequency of a token to be included in the vocabulary',
+        "--min-freq",
+        help="Minimum frequency of a token to be included in the vocabulary",
         type=int,
         default=3,
     )
     group.add_argument(
-        '--lowercase',
-        help='Whether to lowercase the text before training tokenizer',
-        action='store_true',
+        "--lowercase",
+        help="Whether to lowercase the text before training tokenizer",
+        action="store_true",
     )
     group.add_argument(
-        '--num-workers',
-        help='Number of workers',
+        "--num-workers",
+        help="Number of workers",
         type=int,
         default=1,
     )
 
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Training tokenizer for GPT2 model',
+        description="Training tokenizer for GPT2 model",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_opts(parser)
@@ -138,5 +143,5 @@ def main():
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

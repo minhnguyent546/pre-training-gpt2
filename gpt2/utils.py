@@ -3,44 +3,46 @@ import io
 import math
 import os
 import random
-import regex
 import unicodedata
-import yaml
+from pickle import Pickler, Unpickler
 from typing import Any
 
 import numpy as np
-
-from pickle import Pickler, Unpickler
-
+import regex
 import torch
 import torch.nn as nn
 import torch.nn.functional as Fun
+import yaml
 from torch import Tensor
 
-if 'PJRT_DEVICE' in os.environ:
+if "PJRT_DEVICE" in os.environ:
     import torch_xla as xla  # noqa: F401
     import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
 
 
-def set_seed(seed: int = 0x3f3f3f3f):
+def set_seed(seed: int = 0x3F3F3F3F):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
 
 def load_yaml_config(config_path: str):
     with open(config_path) as config_file:
         config = yaml.safe_load(config_file)
     return config
 
+
 def chunks(data: list[Any] | str, chunk_size: int = 1_000):
     for i in range(0, len(data), chunk_size):
-        yield data[i:i+chunk_size]
+        yield data[i : i + chunk_size]
+
 
 def noam_decay(step_num: int, d_model: int, warmup_steps: int, factor: float = 1.0) -> float:
     """As described in https://arxiv.org/pdf/1706.03762.pdf."""
     step_num = max(step_num, 1)
     return factor * d_model ** (-0.5) * min(step_num ** (-0.5), step_num * warmup_steps ** (-1.5))
+
 
 def cosine_decay(
     step_num: int,
@@ -64,12 +66,15 @@ def cosine_decay(
         decayed_lr = min_lr + (lr - min_lr) * coeff
     return factor * decayed_lr
 
+
 def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
+
 def is_xla_device(device: torch.device | None) -> bool:
-    return device is not None and device.type == 'xla'
+    return device is not None and device.type == "xla"
+
 
 def make_optimizer(
     model,
@@ -85,21 +90,24 @@ def make_optimizer(
     decay_params = [param for param in param_list if param.dim() >= 2]
     no_decay_params = [param for param in param_list if param.dim() < 2]
     param_groups = [
-        {'params': decay_params, 'weight_decay': weight_decay},
-        {'params': no_decay_params, 'weight_decay': 0.0},
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
     ]
     optim_type = optim_type.lower()
-    use_fused_impl = device.type == 'cuda'
-    if optim_type == 'adam':
+    use_fused_impl = device.type == "cuda"
+    if optim_type == "adam":
         adam_optim = syncfree.Adam if use_syncfree_optim else torch.optim.Adam
         optimizer = adam_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
-    elif optim_type == 'adamw':
+    elif optim_type == "adamw":
         adamw_optim = syncfree.AdamW if use_syncfree_optim else torch.optim.AdamW
         optimizer = adamw_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
     else:
-        raise ValueError(f'Unsupported optimizer type: {optim_type}. Possible values are: adam, adamw')
+        raise ValueError(
+            f"Unsupported optimizer type: {optim_type}. Possible values are: adam, adamw"
+        )
 
     return optimizer
+
 
 def top_k_logits(logits: Tensor, top_k: int = 0) -> Tensor:
     if top_k <= 0:
@@ -108,8 +116,9 @@ def top_k_logits(logits: Tensor, top_k: int = 0) -> Tensor:
     assert logits.dim() == 2
     top_k = min(top_k, logits.size(-1))
     topk_values = torch.topk(logits, k=top_k, dim=-1).values
-    logits[logits < topk_values[:, [-1]]] = float('-inf')
+    logits[logits < topk_values[:, [-1]]] = float("-inf")
     return logits
+
 
 def top_p_logits(logits: Tensor, top_p: float = 1.0) -> Tensor:
     """Nucleus sampling (Nucleus decoding)"""
@@ -125,17 +134,18 @@ def top_p_logits(logits: Tensor, top_p: float = 1.0) -> Tensor:
         index=sorted_indices,
         src=mask,
     )
-    logits[~indices_to_keep] = float('-inf')
+    logits[~indices_to_keep] = float("-inf")
     return logits
+
 
 def clean_text(text: str, *, strip: bool = True, keep_punct: bool = True) -> str:
     # NFC normalization
-    text = unicodedata.normalize('NFC', text)
+    text = unicodedata.normalize("NFC", text)
     # remove non-latin characters (but keep numbers, punctuations, and whitespaces)
     if keep_punct:
-        text = regex.sub(r'([^\p{Latin}\p{Punctuation}0-9\s]+)', r'', text)
+        text = regex.sub(r"([^\p{Latin}\p{Punctuation}0-9\s]+)", r"", text)
     else:
-        text = regex.sub(r'([^\p{Latin}0-9\s]+)', r'', text)
+        text = regex.sub(r"([^\p{Latin}0-9\s]+)", r"", text)
     # normalize tone
     text = normalize_tone(text)
     if strip:
@@ -191,6 +201,7 @@ tone_normalization_map = {
     "ỤY": "UỴ",
 }
 
+
 def normalize_tone(text: str) -> str:
     """
     Tone normalization for Vietnamese (source: https://github.com/VinAIResearch/BARTpho/blob/main/VietnameseToneNormalization.md)
@@ -199,22 +210,25 @@ def normalize_tone(text: str) -> str:
         text = text.replace(orig, repl)
     return text
 
+
 def ensure_num_saved_checkpoints(
     checkpoints_dir: str,
     model_basename: str,
     limit: int,
 ) -> None:
-    checkpoints = glob.glob(os.path.join(checkpoints_dir, f'{model_basename}-*.pt'))
+    checkpoints = glob.glob(os.path.join(checkpoints_dir, f"{model_basename}-*.pt"))
     checkpoints = list(checkpoints)
     if len(checkpoints) <= limit:
         return
 
-    checkpoints = sorted(checkpoints, key=lambda x: int(x.split('-')[-1][:-3]))
+    checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[-1][:-3]))
     for cp in checkpoints[:-limit]:
         os.remove(cp)
 
+
 def count_model_param(model: nn.Module) -> int:
     return sum(param.numel() for param in model.parameters() if param.requires_grad)
+
 
 def object_to_tensor(obj, device, group=None):
     """Modified from `torch/distributed/distributed_c10d.py`."""
@@ -228,11 +242,13 @@ def object_to_tensor(obj, device, group=None):
     local_size = torch.LongTensor([byte_tensor.numel()]).to(device)
     return byte_tensor, local_size
 
+
 def tensor_to_object(tensor, tensor_size, group=None):
     """Modified from `torch/distributed/distributed_c10d.py`."""
     tensor = tensor.cpu()
     buf = tensor.numpy().tobytes()[:tensor_size]
     return Unpickler(io.BytesIO(buf)).load()
+
 
 def get_perplexity(loss: float) -> float:
     return math.exp(loss)

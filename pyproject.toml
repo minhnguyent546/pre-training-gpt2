@@ -29,6 +29,7 @@ xla-tpu = [
 [dependency-groups]
 dev = [
     "ruff>=0.12.10",
+    "transformers<5.0.0",
 ]
 
 [tool.ruff]
