@@ -22,6 +22,7 @@ import torch_xla.core.xla_model as xm
 import torch_xla.distributed.parallel_loader as xpl
 import torch_xla.distributed.xla_backend  # required for `xla://` init_method and `xla` backend
 import torch_xla.distributed.xla_multiprocessing as xmp
+
 # import torch_xla.experimental.pjrt_backend  # required for TPU v2/v3 as TPU v2/v3 support in `torch.distributed` is still experimental
 import torch_xla.runtime as xr
 
@@ -43,20 +44,20 @@ def train_model(args: argparse.Namespace):
     device_hw = xm.xla_device_hw(device)
 
     torch.set_float32_matmul_precision(args.matmul_precision)
-    print(f'Set float32 matmul precision to {args.matmul_precision}')
+    print(f"Set float32 matmul precision to {args.matmul_precision}")
 
     if args.train_batch_size % xr.world_size() != 0:
-        raise ValueError('train_batch_size must be divisible by world_size')
+        raise ValueError("train_batch_size must be divisible by world_size")
     if args.eval_batch_size % xr.world_size() != 0:
-        raise ValueError('eval_batch_size must be divisible by world_size')
+        raise ValueError("eval_batch_size must be divisible by world_size")
     train_batch_size = args.train_batch_size // xr.world_size()
     eval_batch_size = args.eval_batch_size // xr.world_size()
     effective_batch_size = train_batch_size * xr.world_size() * args.gradient_accum_step
     xm.master_print(
-        f'Effective batch size: {effective_batch_size} '
-        f'(micro_batch_size={train_batch_size}, '
-        f'gradient_accum_step={args.gradient_accum_step}, '
-        f'num_devices={xr.world_size()})'
+        f"Effective batch size: {effective_batch_size} "
+        f"(micro_batch_size={train_batch_size}, "
+        f"gradient_accum_step={args.gradient_accum_step}, "
+        f"num_devices={xr.world_size()})"
     )
 
     # dataset
@@ -96,15 +97,15 @@ def train_model(args: argparse.Namespace):
     # mixed precision training
     # note: AMP only supported for XLA:TPU and XLA:GPU
     mp_dtype = torch.float32
-    if args.mixed_precision == 'fp16':
+    if args.mixed_precision == "fp16":
         mp_dtype = torch.float16
-    elif args.mixed_precision == 'bf16':
+    elif args.mixed_precision == "bf16":
         mp_dtype = torch.bfloat16
     elif isinstance(args.mixed_precision, str):
-        raise ValueError(f'Unsupported mixed precision type: {args.mixed_precision}')
+        raise ValueError(f"Unsupported mixed precision type: {args.mixed_precision}")
     autocast_context = torch_xla.amp.autocast(
         device,
-        enabled=((mp_dtype in (torch.float16, torch.bfloat16)) and device_hw != 'CPU'),
+        enabled=((mp_dtype in (torch.float16, torch.bfloat16)) and device_hw != "CPU"),
         dtype=mp_dtype,
     )
     autocast_enabled = autocast_context._enabled  # pyright: ignore[reportPrivateUsage]
@@ -112,10 +113,12 @@ def train_model(args: argparse.Namespace):
         autocast_context = nullcontext()
 
     # scaling is not needed for bfoat16
-    scaler = torch_xla.amp.GradScaler(enabled=(mp_dtype == torch.float16 and device_hw != 'TPU'))
+    scaler = torch_xla.amp.GradScaler(
+        enabled=(mp_dtype == torch.float16 and device_hw != "TPU")
+    )
 
     # resume from previous checkpoint
-    pretrained_models = ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']
+    pretrained_models = ["gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"]
     saved_states = None
     if args.from_checkpoint is None:
         gpt_config = GPTConfig(
@@ -131,7 +134,7 @@ def train_model(args: argparse.Namespace):
         )
         model = GPT(gpt_config)
     elif args.from_checkpoint in pretrained_models:
-        xm.master_print(f'Loading states from pretrained model {args.from_checkpoint}')
+        xm.master_print(f"Loading states from pretrained model {args.from_checkpoint}")
         gpt_config = GPTConfig(
             vocab_size=args.vocab_size,
             seq_length=args.seq_length,
@@ -146,30 +149,25 @@ def train_model(args: argparse.Namespace):
         if xm.is_master_ordinal(local=True):
             # make sure the checkpoint is downloaded only once by the local master process
             model = GPT.from_pretrained(args.from_checkpoint, gpt_config)
-            xm.rendezvous('checkpoint_downloaded')
+            xm.rendezvous("checkpoint_downloaded")
         else:
-            xm.rendezvous('checkpoint_downloaded')
+            xm.rendezvous("checkpoint_downloaded")
             model = GPT.from_pretrained(args.from_checkpoint, gpt_config)
         model.truncate_seq_length(args.seq_length)
         gpt_config.seq_length = args.seq_length
     else:
-        xm.master_print(f'Loading states from checkpoint {args.from_checkpoint}')
+        xm.master_print(f"Loading states from checkpoint {args.from_checkpoint}")
         # model is saved with xm.save() which moves tensors to CPU before saving,
         # so we can safely discard `map_location`.
         saved_states = torch.load(args.from_checkpoint, map_location=None)
-        required_keys = [
-            'model',
-            'optimizer',
-            'lr_scheduler',
-            'config'
-        ]
+        required_keys = ["model", "optimizer", "lr_scheduler", "config"]
         if scaler.is_enabled():
-            required_keys.append('scaler')
+            required_keys.append("scaler")
         for key in required_keys:
             if key not in saved_states:
                 raise ValueError(f'Missing key "{key}" in checkpoint')
         # TODO: check keys that do not require configuration match
-        gpt_config = GPTConfig(**saved_states['config'])
+        gpt_config = GPTConfig(**saved_states["config"])
         model = GPT(gpt_config)
 
     model.to(device)
@@ -188,37 +186,47 @@ def train_model(args: argparse.Namespace):
         weight_decay=args.weight_decay,
         use_syncfree_optim=autocast_enabled and args.use_syncfree_optim,
     )
-    if args.decay_method == 'noam':
+    if args.decay_method == "noam":
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: utils.noam_decay(
-                step, args.d_model, args.warmup_steps,
+                step,
+                args.d_model,
+                args.warmup_steps,
             ),
         )
-    elif args.decay_method == 'cosine':
+    elif args.decay_method == "cosine":
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: utils.cosine_decay(
-                step, learning_rate, args.min_lr,
+                step,
+                learning_rate,
+                args.min_lr,
                 args.warmup_steps,
-                args.decay_steps, factor=1/learning_rate,
+                args.decay_steps,
+                factor=1 / learning_rate,
             ),
         )
     else:
-        raise ValueError(f'Unsupported scheduler decay method: {args.decay_method}')
+        raise ValueError(f"Unsupported scheduler decay method: {args.decay_method}")
 
     initial_step = 0
     if saved_states is not None:
-        unwanted_prefixes = ['module.', '_orig_mod.']  # created by DDP() and torch.compile()
+        unwanted_prefixes = [
+            "module.",
+            "_orig_mod.",
+        ]  # created by DDP() and torch.compile()
         for prefix in unwanted_prefixes:
-            consume_prefix_in_state_dict_if_present(saved_states['model'], prefix=prefix)
-        model.load_state_dict(saved_states['model'])
-        optimizer.load_state_dict(saved_states['optimizer'])
-        lr_scheduler.load_state_dict(saved_states['lr_scheduler'])
+            consume_prefix_in_state_dict_if_present(
+                saved_states["model"], prefix=prefix
+            )
+        model.load_state_dict(saved_states["model"])
+        optimizer.load_state_dict(saved_states["optimizer"])
+        lr_scheduler.load_state_dict(saved_states["lr_scheduler"])
         if scaler.is_enabled():
-            scaler.load_state_dict(saved_states['scaler'])
-        if 'global_step' in saved_states:
-            initial_step = saved_states['global_step']
+            scaler.load_state_dict(saved_states["scaler"])
+        if "global_step" in saved_states:
+            initial_step = saved_states["global_step"]
 
     # initialization is nondeterministic with multiple threads in PjRt.
     # synchronize model parameters across replicas manually.
@@ -228,8 +236,13 @@ def train_model(args: argparse.Namespace):
     raw_model = model
     # compile the model
     if args.compile:
-        xm.master_print('Compiling the model')
-        model = torch.compile(model, backend='openxla' if device.type == 'xla' else 'inductor', dynamic=False, fullgraph=True)
+        xm.master_print("Compiling the model")
+        model = torch.compile(
+            model,
+            backend="openxla" if device.type == "xla" else "inductor",
+            dynamic=False,
+            fullgraph=True,
+        )
 
     # wrap the model with DDP
     if args.ddp:
@@ -250,9 +263,9 @@ def train_model(args: argparse.Namespace):
             args.valid_steps,
             autocast_context,
         )
-        xm.master_print('** Testing results **')
-        xm.master_print(f'Loss: {valid_results["loss"]}')
-        xm.master_print(f'Perplexity: {utils.get_perplexity(valid_results["loss"])}')
+        xm.master_print("** Testing results **")
+        xm.master_print(f"Loss: {valid_results['loss']}")
+        xm.master_print(f"Perplexity: {utils.get_perplexity(valid_results['loss'])}")
         return
 
     # logging with wandb
@@ -265,19 +278,20 @@ def train_model(args: argparse.Namespace):
             tags=args.wandb_tags,
             notes=args.wandb_notes,
             id=args.wandb_resume_id,
-            resume='must' if args.wandb_resume_id is not None else None,
+            resume="must" if args.wandb_resume_id is not None else None,
         )
 
     # training loop
     global_step = initial_step
-    batch_loss = 0.0
     wandb_accum_logs: list[dict[str, Any]] = []
-    running_loss = XLAAverageMeter('running_losses', device=device)
+    running_loss = XLAAverageMeter("running_losses", device=device)
 
-    xm.master_print(f'Model has {utils.count_model_param(raw_model) / 10 ** 6:0.2f}M parameters')
+    xm.master_print(
+        f"Model has {utils.count_model_param(raw_model) / 10**6:0.2f}M parameters"
+    )
     train_iter = tqdm(
         range(initial_step, args.train_steps),
-        desc=f'{device_hw}:{xr.global_ordinal()} - Training model',
+        desc=f"{device_hw}:{xr.global_ordinal()} - Training model",
         disable=xr.local_ordinal() != 0,
         ncols=120,
     )
@@ -286,149 +300,229 @@ def train_model(args: argparse.Namespace):
     model.train()
     optimizer.zero_grad()
     while global_step < args.train_steps:
-        for batch_idx, (input_ids, labels) in enumerate(train_device_loader):
-            if input_ids.dim() == 3:
-                assert input_ids.shape[0] == 1
-                input_ids = input_ids[0]
-            if labels.dim() == 3:
-                assert labels.shape[0] == 1
-                labels = labels[0]
+        total_num_samples = len(train_device_loader)
+        last_iter_num_batches = total_num_samples % args.gradient_accum_steps
+        if last_iter_num_batches == 0:
+            last_iter_num_batches = args.gradient_accum_steps
 
-            if args.ddp:
-                # we only sync gradients at the last step of gradient accumulation
-                # we can use the below trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
-                model.require_backward_grad_sync = (batch_idx + 1) % args.gradient_accum_step == 0
+        # determine the number of updates for the current epoch
+        # based on gradient accumulation steps
+        num_updates_per_epoch = (
+            total_num_samples + args.gradient_accum_steps - 1
+        ) // args.gradient_accum_steps  # ceil_div
 
-            with autocast_context:
-                logits = model(input_ids)
-                loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
+        for update_step in range(num_updates_per_epoch):
+            num_batches = (
+                args.gradient_accum_steps
+                if update_step + 1 < num_updates_per_epoch
+                else last_iter_num_batches
+            )
+            batches, num_items_in_batch = utils.get_batch_samples(
+                data_iter=train_device_loader,
+                num_batches=num_batches,
+                labels_index=1,
+            )
+            assert num_items_in_batch is not None
+            num_batches = len(batches)  # actual number batches retrieved
 
-            if args.gradient_accum_step > 1:
-                loss /= args.gradient_accum_step
-            batch_loss += loss.detach()
+            batch_loss: float = 0.0
+            for batch_idx, (input_ids, labels) in enumerate(batches):
+                # for batch_idx, (input_ids, labels) in enumerate(train_device_loader):
+                if input_ids.dim() == 3:
+                    assert input_ids.shape[0] == 1
+                    input_ids = input_ids[0]
+                if labels.dim() == 3:
+                    assert labels.shape[0] == 1
+                    labels = labels[0]
 
-            scaler.scale(loss).backward()
+                if args.ddp:
+                    # we only sync gradients at the last step of gradient accumulation
+                    # we can use the below trick or model.no_sync context manager (see: https://github.com/pytorch/pytorch/blob/main/torch/nn/parallel/distributed.py#L1404)
+                    model.require_backward_grad_sync = batch_idx == num_batches - 1
 
-            if (batch_idx + 1) % args.gradient_accum_step == 0:
-                if not args.ddp:
-                    xm.reduce_gradients(optimizer)
-                if args.max_grad_norm > 0:
-                    scaler.unscale_(optimizer)
-                    nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
-
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
-
-                # TODO: handle the case when wandb is disabled
-                wandb_accum_logs.append({
-                    f'learning_rate/group_{group_id}': group_lr
-                    for group_id, group_lr in enumerate(lr_scheduler.get_last_lr())
-                })
-                wandb_accum_logs[-1].update({
-                    'loss/batch_loss': batch_loss,
-                    'step': global_step,
-                })
-
-                lr_scheduler.step()
-                running_loss.update(batch_loss)
-
-                if (global_step + 1) % args.valid_interval == 0:
-                    xm.rendezvous('all_reduce_running_loss')
-                    running_loss.all_reduce()
-                    valid_results = eval_model(
-                        model,
-                        device,
-                        criterion,
-                        validation_device_loader,
-                        args.valid_steps,
-                        autocast_context,
+                with autocast_context:
+                    logits = model(input_ids)
+                    loss = criterion(
+                        input=logits.view(-1, logits.size(-1)),
+                        targets=labels.view(-1),
+                        reduction="sum",
                     )
-                    wandb_accum_logs[-1].update({
-                        'loss/train': running_loss.average,
-                        'loss/valid': valid_results['loss'],
-                    })
-                    running_loss.reset()
 
-                if (
-                    len(wandb_accum_logs) >= args.wandb_logging_interval or
-                    (len(wandb_accum_logs) > 0 and global_step + 1 >= args.train_steps)
+                    if num_items_in_batch > 0:
+                        loss = loss / num_items_in_batch
+
+                scaler.scale(loss).backward()
+                batch_loss += loss.detach()
+
+            if not args.ddp:
+                xm.reduce_gradients(optimizer)
+
+            grad_norm_value = 0.0
+            if args.max_grad_norm > 0:
+                scaler.unscale_(optimizer)
+                grad_norm_value = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    max_norm=args.max_grad_norm,
+                    norm_type=2,
+                )
+                if not bool(torch.isinf(grad_norm_value)) and not bool(
+                    torch.isnan(grad_norm_value)
                 ):
-                    batch_loss_values = [loss['loss/batch_loss'] for loss in wandb_accum_logs]
-                    xm.rendezvous('all_reduce_batch_loss')
-                    reduced_batch_loss_values = xm.all_reduce(xm.REDUCE_SUM, torch.tensor(batch_loss_values, device=device), scale=1.0 / xr.world_size())
-                    reduced_batch_loss_values = reduced_batch_loss_values.tolist()
-                    for idx in range(len(wandb_accum_logs)):
-                        wandb_accum_logs[idx]['loss/batch_loss'] = reduced_batch_loss_values[idx]
-                    if wandb_run is not None:
-                        for log_idx in range(len(wandb_accum_logs)):
-                            wandb_run.log(wandb_accum_logs[log_idx])
-                    wandb_accum_logs = []
-                    xm.rendezvous('exit_wandb_logging')
+                    grad_norm_value = grad_norm_value.item()
+                else:
+                    grad_norm_value = 0.0
 
-                if (global_step + 1) % args.save_interval == 0:
-                    if xm.is_master_ordinal(local=True):
-                        checkpoint_dict = {
-                            'model': raw_model.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'lr_scheduler': lr_scheduler.state_dict(),
-                            'config': vars(gpt_config),
-                            'global_step': global_step + 1,
-                        }
-                        if scaler.is_enabled():
-                            checkpoint_dict['scaler'] = scaler.state_dict()
-                        utils.ensure_num_saved_checkpoints(
-                            checkpoints_dir=args.checkpoints_dir,
-                            model_basename='gpt2',
-                            limit=args.saved_checkpoint_limit,
-                        )
-                        model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step + 1}.pt')
-                        xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=False)
-                    xm.rendezvous('save_checkpoint')
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
 
-                train_iter.set_postfix({
-                    'loss': f'{batch_loss:0.3f}',
-                })
-                batch_loss = 0.0
-                global_step += 1
-                train_iter.update()
-                if global_step >= args.train_steps:
-                    break
+            # TODO: handle the case when wandb is disabled
+            wandb_accum_logs.append(
+                {
+                    f"learning_rate/group_{group_id}": group_lr
+                    for group_id, group_lr in enumerate(lr_scheduler.get_last_lr())
+                }
+            )
+            wandb_accum_logs[-1].update(
+                {
+                    "loss/batch_loss": batch_loss,
+                    "step": global_step,
+                }
+            )
+
+            lr_scheduler.step()
+            running_loss.update(batch_loss, num_items_in_batch)
+
+            # validate
+            if (global_step + 1) % args.valid_interval == 0:
+                xm.rendezvous("all_reduce_running_loss")
+                running_loss.all_reduce()
+                valid_results = eval_model(
+                    model,
+                    device,
+                    criterion,
+                    validation_device_loader,
+                    args.valid_steps,
+                    autocast_context,
+                )
+                wandb_accum_logs[-1].update(
+                    {
+                        "loss/train": running_loss.average,
+                        "loss/valid": valid_results["loss"],
+                    }
+                )
+                running_loss.reset()
+
+            # log to wandb
+            if len(wandb_accum_logs) >= args.wandb_logging_interval or (
+                len(wandb_accum_logs) > 0 and global_step + 1 >= args.train_steps
+            ):
+                batch_loss_values = [
+                    loss["loss/batch_loss"] for loss in wandb_accum_logs
+                ]
+                xm.rendezvous("all_reduce_batch_loss")
+                reduced_batch_loss_values = xm.all_reduce(
+                    xm.REDUCE_SUM,
+                    torch.tensor(batch_loss_values, device=device),
+                    scale=1.0 / xr.world_size(),
+                )
+                reduced_batch_loss_values = reduced_batch_loss_values.tolist()
+                for idx in range(len(wandb_accum_logs)):
+                    wandb_accum_logs[idx]["loss/batch_loss"] = (
+                        reduced_batch_loss_values[idx]
+                    )
+                if wandb_run is not None:
+                    for log_idx in range(len(wandb_accum_logs)):
+                        wandb_run.log(wandb_accum_logs[log_idx])
+                wandb_accum_logs = []
+                xm.rendezvous("exit_wandb_logging")
+
+            # saving checkpoint
+            if (global_step + 1) % args.save_interval == 0:
+                if xm.is_master_ordinal(local=True):
+                    checkpoint_dict = {
+                        "model": raw_model.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "lr_scheduler": lr_scheduler.state_dict(),
+                        "config": vars(gpt_config),
+                        "global_step": global_step + 1,
+                    }
+                    if scaler.is_enabled():
+                        checkpoint_dict["scaler"] = scaler.state_dict()
+                    utils.ensure_num_saved_checkpoints(
+                        checkpoints_dir=args.checkpoints_dir,
+                        model_basename="gpt2",
+                        limit=args.saved_checkpoint_limit,
+                    )
+                    model_save_path = os.path.join(
+                        checkpoints_dir, f"gpt2-{global_step + 1}.pt"
+                    )
+                    xm.save(
+                        checkpoint_dict,
+                        model_save_path,
+                        master_only=True,
+                        global_master=False,
+                    )
+                xm.rendezvous("save_checkpoint")
+
+            train_iter.set_postfix(
+                {
+                    "loss": f"{batch_loss:0.3f}",
+                    "grad_norm": f"{grad_norm_value:0.4f}",
+                }
+            )
+            global_step += 1
+            train_iter.update()
+            if global_step >= args.train_steps:
+                break
 
         # also save the model at the last step
-        if global_step == args.train_steps and args.train_steps % args.save_interval != 0:
+        if (
+            global_step == args.train_steps
+            and args.train_steps % args.save_interval != 0
+        ):
             if xm.is_master_ordinal(local=True):
                 checkpoint_dict = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'config': vars(gpt_config),
-                    'global_step': global_step + 1,
+                    "model": raw_model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "lr_scheduler": lr_scheduler.state_dict(),
+                    "config": vars(gpt_config),
+                    "global_step": global_step + 1,
                 }
                 if scaler.is_enabled():
-                    checkpoint_dict['scaler'] = scaler.state_dict()
+                    checkpoint_dict["scaler"] = scaler.state_dict()
                 utils.ensure_num_saved_checkpoints(
                     checkpoints_dir=args.checkpoints_dir,
-                    model_basename='gpt2',
+                    model_basename="gpt2",
                     limit=args.saved_checkpoint_limit,
                 )
-                model_save_path = os.path.join(checkpoints_dir, f'gpt2-{global_step}.pt')
-                xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=False)
-            xm.rendezvous('save_checkpoint')
+                model_save_path = os.path.join(
+                    checkpoints_dir, f"gpt2-{global_step}.pt"
+                )
+                xm.save(
+                    checkpoint_dict,
+                    model_save_path,
+                    master_only=True,
+                    global_master=False,
+                )
+            xm.rendezvous("save_checkpoint")
+
 
 def _mp_fn(index: int, args: argparse.Namespace) -> None:
-    dist.init_process_group(backend='xla', init_method='xla://')
+    dist.init_process_group(backend="xla", init_method="xla://")
     train_model(args)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='Run pre-training GPT2 model with XLA',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        description="Run pre-training GPT2 model with XLA",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     opts.add_run_pretrain_xla_opts(parser)
     args = parser.parse_args()
 
     xmp.spawn(_mp_fn, args=(args,), start_method=args.mp_start_method)
+
 
 @torch.no_grad()
 def eval_model(
@@ -444,12 +538,12 @@ def eval_model(
         autocast_context = nullcontext()
     progess_bar = tqdm(
         range(valid_steps),
-        desc=f'{device_hw}:{xr.global_ordinal()} - Evaluating model',
+        desc=f"{device_hw}:{xr.global_ordinal()} - Evaluating model",
         disable=xr.local_ordinal() != 0,
         ncols=120,
     )
 
-    running_loss = XLAAverageMeter('running_loss', device=device)
+    running_loss = XLAAverageMeter("running_loss", device=device)
 
     # set model in evaluation mode
     is_training = model.training
@@ -466,19 +560,19 @@ def eval_model(
             loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
 
         running_loss.update(loss.detach())
-        progess_bar.set_postfix({'loss': f'{loss:0.3f}'})
+        progess_bar.set_postfix({"loss": f"{loss:0.3f}"})
         progess_bar.update()
         if (batch_idx + 1) >= valid_steps:
             break
 
     # set model back to the original mode
     model.train(is_training)
-    xm.rendezvous('all_reduce_evaluation_loss')
+    xm.rendezvous("all_reduce_evaluation_loss")
     running_loss.all_reduce()
     return {
-        'loss': running_loss.average,
+        "loss": running_loss.average,
     }
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
