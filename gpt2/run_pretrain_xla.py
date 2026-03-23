@@ -180,7 +180,8 @@ def train_model(args: argparse.Namespace):
         device,
         args.optim_type,
         lr=learning_rate,
-        betas=args.betas,
+        betas=args.adam_betas,
+        eps=args.adam_eps,
         weight_decay=args.weight_decay,
         use_syncfree_optim=autocast_enabled and args.use_syncfree_optim,
     )

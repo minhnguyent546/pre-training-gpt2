@@ -193,11 +193,17 @@ def _add_common_training_opts(parser: argparse.ArgumentParser) -> None:
         default=6.0e-4,
     )
     group.add_argument(
-        "--betas",
+        "--adam-betas",
         nargs=2,
         type=float,
         help="Optimizer beta values",
         default=[0.9, 0.999],
+    )
+    group.add_argument(
+        "--adam-eps",
+        type=float,
+        help="Optimizer epsilon value",
+        default=1e-8,
     )
     group.add_argument(
         "--weight-decay",
