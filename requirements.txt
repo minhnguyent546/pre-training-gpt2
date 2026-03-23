@@ -1,9 +1,0 @@
-numpy==1.26.4
-PyYAML==6.0.1
-regex==2024.5.15
-tokenizers==0.19.1
-torch==2.3.0
-tqdm==4.66.3
-datasets==2.20.0
-wandb==0.17.4
-tiktoken==0.7.0
