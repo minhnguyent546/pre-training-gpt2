@@ -307,7 +307,7 @@ def train_model(args: argparse.Namespace):
             num_items_in_batch += torch.count_nonzero(labels != -100).item()
             batches.append((input_ids, labels))
 
-            if batch_idx + 1 >= args.gradient_accum_step:
+            if (batch_idx + 1) % args.gradient_accum_step == 0:
                 break
 
         batch_loss = 0.0
