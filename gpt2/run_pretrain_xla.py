@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import sys
 from contextlib import nullcontext
 from typing import Any
 
@@ -36,13 +37,27 @@ def train_model(args: argparse.Namespace):
     xm.set_rng_state(args.seed)
 
     checkpoints_dir = utils.ensure_dir(args.checkpoints_dir)
+    log_file = os.path.join(checkpoints_dir, "training.log")
+
+    def master_print(message: str, console: bool = True) -> None:
+        if xm.is_master_ordinal(local=False):
+            if console:
+                print(message)
+            with open(log_file, "a") as f:
+                print(message, file=f)
+
+    master_print(f"Python version: {sys.version}")
+    master_print(
+        f"Pytorch version {torch.version.__version___} compiled for CUDA {torch.version.cuda}"
+    )
+    master_print(f"Pytorch XLA version {xr.version()}")
 
     # training device
     device = xm.xla_device()
     device_hw = xm.xla_device_hw(device)
 
     torch.set_float32_matmul_precision(args.matmul_precision)
-    print(f"Set float32 matmul precision to {args.matmul_precision}")
+    master_print(f"Set float32 matmul precision to {args.matmul_precision}")
 
     if args.train_batch_size % xr.world_size() != 0:
         raise ValueError("train_batch_size must be divisible by world_size")
@@ -51,7 +66,7 @@ def train_model(args: argparse.Namespace):
     train_batch_size = args.train_batch_size // xr.world_size()
     eval_batch_size = args.eval_batch_size // xr.world_size()
     effective_batch_size = train_batch_size * xr.world_size() * args.gradient_accum_step
-    xm.master_print(
+    master_print(
         f"Effective batch size: {effective_batch_size} "
         f"(micro_batch_size={train_batch_size}, "
         f"gradient_accum_step={args.gradient_accum_step}, "
@@ -129,7 +144,7 @@ def train_model(args: argparse.Namespace):
         )
         model = GPT(gpt_config)
     elif args.from_checkpoint in pretrained_models:
-        xm.master_print(f"Loading states from pretrained model {args.from_checkpoint}")
+        master_print(f"Loading states from pretrained model {args.from_checkpoint}")
         gpt_config = GPTConfig(
             vocab_size=args.vocab_size,
             seq_length=args.seq_length,
@@ -150,7 +165,7 @@ def train_model(args: argparse.Namespace):
         model.truncate_seq_length(args.seq_length)
         gpt_config.seq_length = args.seq_length
     else:
-        xm.master_print(f"Loading states from checkpoint {args.from_checkpoint}")
+        master_print(f"Loading states from checkpoint {args.from_checkpoint}")
         # model is saved with xm.save() which moves tensors to CPU before saving,
         # so we can safely discard `map_location`.
         saved_states = torch.load(args.from_checkpoint, map_location=None)
@@ -170,7 +185,7 @@ def train_model(args: argparse.Namespace):
     if model.config.tie_weights:
         model.tie_weights()
 
-    xm.master_print(model)
+    master_print(model)
     criterion = nn.CrossEntropyLoss(reduction="sum")
     eval_criterion = nn.CrossEntropyLoss()
     learning_rate = args.learning_rate
@@ -238,7 +253,7 @@ def train_model(args: argparse.Namespace):
     raw_model = model
     # compile the model
     if args.compile:
-        xm.master_print("Compiling the model")
+        master_print("Compiling the model")
         model = torch.compile(
             model,
             backend="openxla" if device.type == "xla" else "inductor",
@@ -265,9 +280,9 @@ def train_model(args: argparse.Namespace):
             args.valid_steps,
             autocast_context,
         )
-        xm.master_print("** Testing results **")
-        xm.master_print(f"Loss: {valid_results['loss']}")
-        xm.master_print(f"Perplexity: {utils.get_perplexity(valid_results['loss'])}")
+        master_print("** Testing results **")
+        master_print(f"Loss: {valid_results['loss']}")
+        master_print(f"Perplexity: {utils.get_perplexity(valid_results['loss'])}")
         return
 
     # logging with wandb
@@ -288,7 +303,7 @@ def train_model(args: argparse.Namespace):
     wandb_accum_logs: list[dict[str, Any]] = []
     running_loss = XLAAverageMeter("running_losses", device=device)
 
-    xm.master_print(f"Model has {utils.count_model_param(raw_model) / 10**6:0.2f}M parameters")
+    master_print(f"Model has {utils.count_model_param(raw_model) / 10**6:0.2f}M parameters")
     train_iter = tqdm(
         range(initial_step, args.train_steps),
         desc=f"{device_hw}:{xr.global_ordinal()} - Training model",
@@ -387,7 +402,7 @@ def train_model(args: argparse.Namespace):
                 "loss/train": running_loss.average,
                 "loss/valid": valid_results["loss"],
             })
-            xm.master_print(
+            master_print(
                 f"[step {global_step + 1} / {args.train_steps}] running_loss: {running_loss.average:0.4f} | valid loss: {valid_results['loss']:0.4f}"
             )
             running_loss.reset()
@@ -433,6 +448,10 @@ def train_model(args: argparse.Namespace):
                 xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=False)
             xm.rendezvous("save_checkpoint")
 
+        master_print(
+            f"[step {global_step + 1} / {args.train_steps}] loss: {batch_loss:0.4f} | grad_norm: {grad_norm_value:0.4f}",
+            console=False,
+        )
         train_iter.set_postfix({
             "loss": f"{batch_loss:0.3f}",
             "grad_norm": f"{grad_norm_value:0.4f}",
