@@ -100,19 +100,14 @@ class Muon(torch.optim.Optimizer):
 
         for group in self.param_groups:
             params = group["params"]
-            # Pad params list so its length is divisible by world_size
-            remainder = len(params) % world_size
-            if remainder != 0:
-                params_pad = params + [torch.zeros_like(params[-1])] * (world_size - remainder)
-            else:
-                params_pad = params
 
-            for base_i in range(0, len(params_pad), world_size):
-                # Each rank processes one param in this batch
-                p_local = params_pad[base_i + rank]
-
-                if base_i + rank < len(params):
-                    p = params[base_i + rank]
+            # Process parameters in batches of world_size.
+            # Within each batch, rank r is responsible for updating params[base_i + r].
+            for base_i in range(0, len(params), world_size):
+                # Each rank updates its assigned parameter in this batch
+                my_param_idx = base_i + rank
+                if my_param_idx < len(params):
+                    p = params[my_param_idx]
                     if p.grad is None:
                         p.grad = torch.zeros_like(p)  # Force synchronization
                     state = self.state[p]
@@ -122,17 +117,18 @@ class Muon(torch.optim.Optimizer):
                     p.mul_(1 - group["lr"] * group["weight_decay"])
                     p.add_(update.reshape(p.shape), alpha=-group["lr"])
 
-                # All ranks must participate in collective op for synchronization.
-                # xm.all_gather concatenates tensors from all ranks along dim=0.
-                # Using pin_layout=False for better performance with native all_gather.
-                gathered = xm.all_gather(p_local, dim=0, pin_layout=False)
-
-                # Split the gathered result and copy back to params_pad
-                # gathered has shape [world_size * p_local.shape[0], ...]
-                gathered_chunks = gathered.chunk(world_size, dim=0)
-                for i in range(world_size):
-                    if base_i + i < len(params):
-                        params_pad[base_i + i].copy_(gathered_chunks[i])
+                # Synchronize: broadcast each updated param from its responsible rank to all others.
+                # We do all_gather for each param individually since params may have different shapes.
+                # All ranks must call all_gather the same number of times for synchronization.
+                num_params_in_batch = min(world_size, len(params) - base_i)
+                for offset in range(num_params_in_batch):
+                    param_idx = base_i + offset
+                    p = params[param_idx]
+                    # All ranks gather this parameter; rank 'offset' has the updated value
+                    gathered = xm.all_gather(p, dim=0, pin_layout=False)
+                    # Extract the value from rank 'offset' (the rank that updated this param)
+                    updated_p = gathered.narrow(0, offset * p.size(0), p.size(0))
+                    p.copy_(updated_p)
 
         return loss
 
@@ -251,19 +247,14 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
         for group in self.param_groups:
             if group["use_muon"]:
                 params = group["params"]
-                # Pad params list so its length is divisible by world_size
-                remainder = len(params) % world_size
-                if remainder != 0:
-                    params_pad = params + [torch.zeros_like(params[-1])] * (world_size - remainder)
-                else:
-                    params_pad = params
 
-                for base_i in range(0, len(params_pad), world_size):
-                    # Each rank processes one param in this batch
-                    p_local = params_pad[base_i + rank]
-
-                    if base_i + rank < len(params):
-                        p = params[base_i + rank]
+                # Process parameters in batches of world_size.
+                # Within each batch, rank r is responsible for updating params[base_i + r].
+                for base_i in range(0, len(params), world_size):
+                    # Each rank updates its assigned parameter in this batch
+                    my_param_idx = base_i + rank
+                    if my_param_idx < len(params):
+                        p = params[my_param_idx]
                         if p.grad is None:
                             p.grad = torch.zeros_like(p)  # Force synchronization
                         state = self.state[p]
@@ -275,16 +266,18 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         p.mul_(1 - group["lr"] * group["weight_decay"])
                         p.add_(update.reshape(p.shape), alpha=-group["lr"])
 
-                    # All ranks must participate in collective op for synchronization.
-                    # xm.all_gather concatenates tensors from all ranks along dim=0.
-                    # Using pin_layout=False for better performance with native all_gather.
-                    gathered = xm.all_gather(p_local, dim=0, pin_layout=False)
-
-                    # Split the gathered result and copy back to params_pad
-                    gathered_chunks = gathered.chunk(world_size, dim=0)
-                    for i in range(world_size):
-                        if base_i + i < len(params):
-                            params_pad[base_i + i].copy_(gathered_chunks[i])
+                    # Synchronize: broadcast each updated param from its responsible rank to all others.
+                    # We do all_gather for each param individually since params may have different shapes.
+                    # All ranks must call all_gather the same number of times for synchronization.
+                    num_params_in_batch = min(world_size, len(params) - base_i)
+                    for offset in range(num_params_in_batch):
+                        param_idx = base_i + offset
+                        p = params[param_idx]
+                        # All ranks gather this parameter; rank 'offset' has the updated value
+                        gathered = xm.all_gather(p, dim=0, pin_layout=False)
+                        # Extract the value from rank 'offset' (the rank that updated this param)
+                        updated_p = gathered.narrow(0, offset * p.size(0), p.size(0))
+                        p.copy_(updated_p)
             else:
                 for p in group["params"]:
                     if p.grad is None:
