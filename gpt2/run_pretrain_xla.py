@@ -7,7 +7,6 @@ from contextlib import nullcontext
 from typing import Any
 
 import torch
-import torch.amp
 import torch.distributed as dist
 import torch.nn as nn
 import torch.version

@@ -19,6 +19,8 @@ if "PJRT_DEVICE" in os.environ:
     import torch_xla as xla  # noqa: F401
     import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
 
+from gpt2.muon import MuonWithAuxAdam
+
 
 def set_seed(seed: int = 0x3F3F3F3F):
     random.seed(seed)
@@ -90,8 +92,6 @@ def make_optimizer(
     optim_type = optim_type.lower()
     use_fused_impl = device.type == "cuda"
     if optim_type == "muon":
-        from muon import MuonWithAuxAdam
-
         if muon_lr is None:
             raise ValueError("Muon optimizer requires specifying `muon_lr`")
         hidden_weights = [p for p in model.decoder_blocks.parameters() if p.ndim >= 2]
