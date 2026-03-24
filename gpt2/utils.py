@@ -100,8 +100,9 @@ def make_optimizer(
             *model.token_embedding.parameters(),
             *model.positional_embedding.parameters(),
             *model.layer_norm.parameters(),
-            *model.lm_head.parameters(),
         ]
+        if not model.config.tie_weights:
+            nonhidden_params.extend(model.lm_head.parameters())
         param_groups = [
             {
                 "params": hidden_weights,
