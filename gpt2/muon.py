@@ -1,4 +1,4 @@
-# pyright: reportConstantRedefinition=false
+# pyright: reportConstantRedefinition=false, reportIncompatibleMethodOverride=false
 
 """
 Adapted from: https://github.com/KellerJordan/Muon/blob/master/muon.py
@@ -7,8 +7,8 @@ Modifed to work with torch_xla
 """
 
 import torch
-import torch_xla as xla  # noqa: F401
-import torch_xla.core.xla_model as xm
+import torch.distributed as dist
+import torch_xla  # noqa: F401
 import torch_xla.runtime as xr
 
 
@@ -100,15 +100,14 @@ class Muon(torch.optim.Optimizer):
 
         for group in self.param_groups:
             params = group["params"]
-
-            # Process parameters in batches of world_size.
-            # Within each batch, rank r is responsible for updating params[base_i + r].
-            for base_i in range(0, len(params), world_size):
-                # Each rank updates its assigned parameter in this batch
-                my_param_idx = base_i + rank
-                if my_param_idx < len(params):
-                    p = params[my_param_idx]
+            params_pad = params + [torch.empty_like(params[-1])] * (
+                world_size - len(params) % world_size
+            )
+            for base_i in range(len(params))[::world_size]:
+                if base_i + rank < len(params):
+                    p = params[base_i + rank]
                     if p.grad is None:
+                        # continue
                         p.grad = torch.zeros_like(p)  # Force synchronization
                     state = self.state[p]
                     if len(state) == 0:
@@ -116,19 +115,10 @@ class Muon(torch.optim.Optimizer):
                     update = muon_update(p.grad, state["momentum_buffer"], beta=group["momentum"])
                     p.mul_(1 - group["lr"] * group["weight_decay"])
                     p.add_(update.reshape(p.shape), alpha=-group["lr"])
-
-                # Synchronize: broadcast each updated param from its responsible rank to all others.
-                # We do all_gather for each param individually since params may have different shapes.
-                # All ranks must call all_gather the same number of times for synchronization.
-                num_params_in_batch = min(world_size, len(params) - base_i)
-                for offset in range(num_params_in_batch):
-                    param_idx = base_i + offset
-                    p = params[param_idx]
-                    # All ranks gather this parameter; rank 'offset' has the updated value
-                    gathered = xm.all_gather(p, dim=0, pin_layout=False)
-                    # Extract the value from rank 'offset' (the rank that updated this param)
-                    updated_p = gathered.narrow(0, offset * p.size(0), p.size(0))
-                    p.copy_(updated_p)
+                dist.all_gather(
+                    params_pad[base_i : base_i + world_size],
+                    params_pad[base_i + rank],
+                )
 
         return loss
 
@@ -210,28 +200,28 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                 group["lr"] = group.get("lr", 0.02)
                 group["momentum"] = group.get("momentum", 0.95)
                 group["weight_decay"] = group.get("weight_decay", 0)
-                assert set(group.keys()) == set([
+                assert set(group.keys()) == {
                     "params",
                     "lr",
                     "momentum",
                     "weight_decay",
                     "use_muon",
-                ])
+                }
             else:
                 # defaults
                 group["lr"] = group.get("lr", 3e-4)
                 group["betas"] = group.get("betas", (0.9, 0.95))
                 group["eps"] = group.get("eps", 1e-10)
                 group["weight_decay"] = group.get("weight_decay", 0)
-                assert set(group.keys()) == set([
+                assert set(group.keys()) == {
                     "params",
                     "lr",
                     "betas",
                     "eps",
                     "weight_decay",
                     "use_muon",
-                ])
-        super().__init__(param_groups, dict())
+                }
+        super().__init__(param_groups, {})
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -243,19 +233,17 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
 
         world_size = xr.world_size()
         rank = xr.global_ordinal()
-
         for group in self.param_groups:
             if group["use_muon"]:
                 params = group["params"]
-
-                # Process parameters in batches of world_size.
-                # Within each batch, rank r is responsible for updating params[base_i + r].
-                for base_i in range(0, len(params), world_size):
-                    # Each rank updates its assigned parameter in this batch
-                    my_param_idx = base_i + rank
-                    if my_param_idx < len(params):
-                        p = params[my_param_idx]
+                params_pad = params + [torch.empty_like(params[-1])] * (
+                    world_size - len(params) % world_size
+                )
+                for base_i in range(len(params))[::world_size]:
+                    if base_i + rank < len(params):
+                        p = params[base_i + rank]
                         if p.grad is None:
+                            # continue
                             p.grad = torch.zeros_like(p)  # Force synchronization
                         state = self.state[p]
                         if len(state) == 0:
@@ -265,19 +253,9 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         )
                         p.mul_(1 - group["lr"] * group["weight_decay"])
                         p.add_(update.reshape(p.shape), alpha=-group["lr"])
-
-                    # Synchronize: broadcast each updated param from its responsible rank to all others.
-                    # We do all_gather for each param individually since params may have different shapes.
-                    # All ranks must call all_gather the same number of times for synchronization.
-                    num_params_in_batch = min(world_size, len(params) - base_i)
-                    for offset in range(num_params_in_batch):
-                        param_idx = base_i + offset
-                        p = params[param_idx]
-                        # All ranks gather this parameter; rank 'offset' has the updated value
-                        gathered = xm.all_gather(p, dim=0, pin_layout=False)
-                        # Extract the value from rank 'offset' (the rank that updated this param)
-                        updated_p = gathered.narrow(0, offset * p.size(0), p.size(0))
-                        p.copy_(updated_p)
+                    dist.all_gather(
+                        params_pad[base_i : base_i + world_size], params_pad[base_i + rank]
+                    )
             else:
                 for p in group["params"]:
                     if p.grad is None:
@@ -316,28 +294,28 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                 group["lr"] = group.get("lr", 0.02)
                 group["momentum"] = group.get("momentum", 0.95)
                 group["weight_decay"] = group.get("weight_decay", 0)
-                assert set(group.keys()) == set([
+                assert set(group.keys()) == {
                     "params",
                     "lr",
                     "momentum",
                     "weight_decay",
                     "use_muon",
-                ])
+                }
             else:
                 # defaults
                 group["lr"] = group.get("lr", 3e-4)
                 group["betas"] = group.get("betas", (0.9, 0.95))
                 group["eps"] = group.get("eps", 1e-10)
                 group["weight_decay"] = group.get("weight_decay", 0)
-                assert set(group.keys()) == set([
+                assert set(group.keys()) == {
                     "params",
                     "lr",
                     "betas",
                     "eps",
                     "weight_decay",
                     "use_muon",
-                ])
-        super().__init__(param_groups, dict())
+                }
+        super().__init__(param_groups, {})
 
     @torch.no_grad()
     def step(self, closure=None):
