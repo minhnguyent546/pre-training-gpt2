@@ -16,7 +16,7 @@ import yaml
 from torch import Tensor
 
 if "PJRT_DEVICE" in os.environ:
-    import torch_xla as xla  # noqa: F401
+    import torch_xla  # noqa: F401
     import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
 
 from gpt2.muon import MuonWithAuxAdam

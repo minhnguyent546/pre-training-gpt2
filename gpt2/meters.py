@@ -5,7 +5,7 @@ import torch
 import torch.distributed as dist
 
 if "PJRT_DEVICE" in os.environ:
-    import torch_xla as xla  # noqa: F401
+    import torch_xla  # noqa: F401
     import torch_xla.core.xla_model as xm
     import torch_xla.runtime as xr
 
@@ -135,7 +135,7 @@ class XLAAverageMeter(AverageMeterBase):
         if device is not None and not utils.is_xla_device(device):
             raise ValueError(f"Expected device is an XLA device if provided, found {device.type}")
         if device is None:
-            device = xm.xla_device()
+            device = torch_xla.device()
         super().__init__(name, sum, count, device)
 
     def all_reduce(self) -> None:

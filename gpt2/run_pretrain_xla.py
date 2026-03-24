@@ -10,14 +10,11 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.version
-import torch_xla as xla  # noqa: F401
+import torch_xla  # noqa: F401
 import torch_xla.amp
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.parallel_loader as xpl
 import torch_xla.distributed.xla_backend  # required for `xla://` init_method and `xla` backend
-import torch_xla.distributed.xla_multiprocessing as xmp
-
-# import torch_xla.experimental.pjrt_backend  # required for TPU v2/v3 as TPU v2/v3 support in `torch.distributed` is still experimental
 import torch_xla.runtime as xr
 import wandb
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
@@ -34,7 +31,7 @@ from gpt2.model import GPT, GPTConfig
 
 def train_model(args: argparse.Namespace):
     utils.set_seed(args.seed)
-    xm.set_rng_state(args.seed)
+    torch_xla.manual_seed(args.seed)
 
     checkpoints_dir = utils.ensure_dir(args.checkpoints_dir)
     log_file = os.path.join(checkpoints_dir, "training.log")
@@ -54,7 +51,7 @@ def train_model(args: argparse.Namespace):
     master_print(f"Args: {vars(args)}")
 
     # training device
-    device = xm.xla_device()
+    device = torch_xla.device()
     device_hw = xm.xla_device_hw(device)
 
     torch.set_float32_matmul_precision(args.matmul_precision)
@@ -256,11 +253,9 @@ def train_model(args: argparse.Namespace):
     # compile the model
     if args.compile:
         master_print("Compiling the model")
-        model = torch.compile(
+        model = torch_xla.compile(
             model,
-            backend="openxla" if device.type == "xla" else "inductor",
-            dynamic=False,
-            fullgraph=True,
+            full_graph=True,
         )
 
     # wrap the model with DDP
@@ -499,7 +494,7 @@ def main() -> None:
     opts.add_run_pretrain_xla_opts(parser)
     args = parser.parse_args()
 
-    xmp.spawn(_mp_fn, args=(args,), start_method=args.mp_start_method)
+    torch_xla.launch(_mp_fn, args=(args,), start_method=args.mp_start_method)
 
 
 @torch.no_grad()
