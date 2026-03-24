@@ -14,6 +14,7 @@ dependencies = [
     "datasets>=2.20.0",
     "wandb>=0.17.4",
     "tiktoken>=0.7.0",
+    "muon-optimizer",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +29,7 @@ xla-tpu = [
 
 [dependency-groups]
 dev = [
+    "hf-transfer>=0.1.9",
     "ruff>=0.12.10",
     "transformers<5.0.0",
 ]
@@ -76,3 +78,6 @@ preview = true
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
+
+[tool.uv.sources]
+muon-optimizer = { git = "https://github.com/KellerJordan/Muon" }

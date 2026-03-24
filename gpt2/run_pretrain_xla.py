@@ -199,6 +199,7 @@ def train_model(args: argparse.Namespace):
         eps=args.adam_eps,
         weight_decay=args.weight_decay,
         use_syncfree_optim=autocast_enabled and args.use_syncfree_optim,
+        muon_lr=args.muon_lr,
     )
     if args.lr_schedule == "noam":
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
