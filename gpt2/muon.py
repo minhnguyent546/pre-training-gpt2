@@ -100,14 +100,20 @@ class Muon(torch.optim.Optimizer):
 
         for group in self.param_groups:
             params = group["params"]
-            params_pad = params + [torch.empty_like(params[-1])] * (
-                world_size - len(params) % world_size
-            )
-            for base_i in range(len(params))[::world_size]:
+            # Pad params list so its length is divisible by world_size
+            remainder = len(params) % world_size
+            if remainder != 0:
+                params_pad = params + [torch.zeros_like(params[-1])] * (world_size - remainder)
+            else:
+                params_pad = params
+
+            for base_i in range(0, len(params_pad), world_size):
+                # Each rank processes one param in this batch
+                p_local = params_pad[base_i + rank]
+
                 if base_i + rank < len(params):
                     p = params[base_i + rank]
                     if p.grad is None:
-                        # continue
                         p.grad = torch.zeros_like(p)  # Force synchronization
                     state = self.state[p]
                     if len(state) == 0:
@@ -116,22 +122,17 @@ class Muon(torch.optim.Optimizer):
                     p.mul_(1 - group["lr"] * group["weight_decay"])
                     p.add_(update.reshape(p.shape), alpha=-group["lr"])
 
-                out_shape = list(params_pad[base_i + rank].shape)
-                out_shape[0] *= world_size
-                gathered_concat = torch.empty(
-                    out_shape,
-                    dtype=params_pad[base_i + rank].dtype,
-                    device=params_pad[base_i + rank].device,
-                )
-                xm.all_gather(params_pad[base_i + rank], dim=0, output=gathered_concat)
-                gathered_chunks = torch.chunk(gathered_concat, world_size, dim=0)
-                for i in range(world_size):
-                    params_pad[base_i + i].copy_(gathered_chunks[i])
+                # All ranks must participate in collective op for synchronization.
+                # xm.all_gather concatenates tensors from all ranks along dim=0.
+                # Using pin_layout=False for better performance with native all_gather.
+                gathered = xm.all_gather(p_local, dim=0, pin_layout=False)
 
-                # dist.all_gather(
-                #     tensor_list=params_pad[base_i : base_i + dist.get_world_size()],
-                #     tensor=params_pad[base_i + dist.get_rank()],
-                # )
+                # Split the gathered result and copy back to params_pad
+                # gathered has shape [world_size * p_local.shape[0], ...]
+                gathered_chunks = gathered.chunk(world_size, dim=0)
+                for i in range(world_size):
+                    if base_i + i < len(params):
+                        params_pad[base_i + i].copy_(gathered_chunks[i])
 
         return loss
 
@@ -250,14 +251,20 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
         for group in self.param_groups:
             if group["use_muon"]:
                 params = group["params"]
-                params_pad = params + [torch.empty_like(params[-1])] * (
-                    world_size - len(params) % world_size
-                )
-                for base_i in range(len(params))[::world_size]:
+                # Pad params list so its length is divisible by world_size
+                remainder = len(params) % world_size
+                if remainder != 0:
+                    params_pad = params + [torch.zeros_like(params[-1])] * (world_size - remainder)
+                else:
+                    params_pad = params
+
+                for base_i in range(0, len(params_pad), world_size):
+                    # Each rank processes one param in this batch
+                    p_local = params_pad[base_i + rank]
+
                     if base_i + rank < len(params):
                         p = params[base_i + rank]
                         if p.grad is None:
-                            # continue
                             p.grad = torch.zeros_like(p)  # Force synchronization
                         state = self.state[p]
                         if len(state) == 0:
@@ -268,22 +275,16 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         p.mul_(1 - group["lr"] * group["weight_decay"])
                         p.add_(update.reshape(p.shape), alpha=-group["lr"])
 
-                    out_shape = list(params_pad[base_i + rank].shape)
-                    out_shape[0] *= world_size
-                    gathered_concat = torch.empty(
-                        out_shape,
-                        dtype=params_pad[base_i + rank].dtype,
-                        device=params_pad[base_i + rank].device,
-                    )
-                    xm.all_gather(params_pad[base_i + rank], dim=0, output=gathered_concat)
-                    gathered_chunks = torch.chunk(gathered_concat, world_size, dim=0)
-                    for i in range(world_size):
-                        params_pad[base_i + i].copy_(gathered_chunks[i])
+                    # All ranks must participate in collective op for synchronization.
+                    # xm.all_gather concatenates tensors from all ranks along dim=0.
+                    # Using pin_layout=False for better performance with native all_gather.
+                    gathered = xm.all_gather(p_local, dim=0, pin_layout=False)
 
-                    # dist.all_gather(
-                    #     tensor_list=params_pad[base_i : base_i + dist.get_world_size()],
-                    #     tensor=params_pad[base_i + dist.get_rank()],
-                    # )
+                    # Split the gathered result and copy back to params_pad
+                    gathered_chunks = gathered.chunk(world_size, dim=0)
+                    for i in range(world_size):
+                        if base_i + i < len(params):
+                            params_pad[base_i + i].copy_(gathered_chunks[i])
             else:
                 for p in group["params"]:
                     if p.grad is None:
