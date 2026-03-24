@@ -103,13 +103,6 @@ def _add_model_opts(parser: argparse.ArgumentParser) -> None:
         default=0.0,
     )
     group.add_argument(
-        "--activation",
-        type=str,
-        help="Which activation function to use",
-        choices=["relu", "gelu"],
-        default="gelu",
-    )
-    group.add_argument(
         "--tie-weights",
         action="store_true",
         help="Whether to tie weights between input and output embeddings",

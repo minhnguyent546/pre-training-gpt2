@@ -125,7 +125,6 @@ def train_model(args: argparse.Namespace):
             num_heads=args.num_heads,
             d_ff=args.d_ff,
             dropout=args.dropout,
-            activation=args.activation,
             tie_weights=args.tie_weights,
         )
         model = GPT(gpt_config)
@@ -139,7 +138,6 @@ def train_model(args: argparse.Namespace):
             num_heads=args.num_heads,
             d_ff=args.d_ff,
             dropout=args.dropout,
-            activation=args.activation,
             tie_weights=args.tie_weights,
         )
         if xm.is_master_ordinal(local=True):
