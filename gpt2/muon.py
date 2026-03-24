@@ -95,14 +95,17 @@ class Muon(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
+        world_size = xr.world_size()
+        rank = xr.global_ordinal()
+
         for group in self.param_groups:
             params = group["params"]
             params_pad = params + [torch.empty_like(params[-1])] * (
-                xr.world_size() - len(params) % xr.world_size()
+                world_size - len(params) % world_size
             )
-            for base_i in range(len(params))[:: xr.world_size()]:
-                if base_i + xr.global_ordinal() < len(params):
-                    p = params[base_i + xr.global_ordinal()]
+            for base_i in range(len(params))[::world_size]:
+                if base_i + rank < len(params):
+                    p = params[base_i + rank]
                     if p.grad is None:
                         # continue
                         p.grad = torch.zeros_like(p)  # Force synchronization
@@ -112,10 +115,23 @@ class Muon(torch.optim.Optimizer):
                     update = muon_update(p.grad, state["momentum_buffer"], beta=group["momentum"])
                     p.mul_(1 - group["lr"] * group["weight_decay"])
                     p.add_(update.reshape(p.shape), alpha=-group["lr"])
-                xm.all_gather(
-                    value=params_pad[base_i + xr.global_ordinal()],
-                    output=params_pad[base_i : base_i + xr.world_size()],
+
+                out_shape = list(params_pad[base_i + rank].shape)
+                out_shape[0] *= world_size
+                gathered_concat = torch.empty(
+                    out_shape,
+                    dtype=params_pad[base_i + rank].dtype,
+                    device=params_pad[base_i + rank].device,
                 )
+                xm.all_gather(params_pad[base_i + rank], dim=0, output=gathered_concat)
+                gathered_chunks = torch.chunk(gathered_concat, world_size, dim=0)
+                for i in range(world_size):
+                    params_pad[base_i + i].copy_(gathered_chunks[i])
+
+                # dist.all_gather(
+                #     tensor_list=params_pad[base_i : base_i + dist.get_world_size()],
+                #     tensor=params_pad[base_i + dist.get_rank()],
+                # )
 
         return loss
 
@@ -228,15 +244,18 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
+        world_size = xr.world_size()
+        rank = xr.global_ordinal()
+
         for group in self.param_groups:
             if group["use_muon"]:
                 params = group["params"]
                 params_pad = params + [torch.empty_like(params[-1])] * (
-                    xr.world_size() - len(params) % xr.world_size()
+                    world_size - len(params) % world_size
                 )
-                for base_i in range(len(params))[:: xr.world_size()]:
-                    if base_i + xr.global_ordinal() < len(params):
-                        p = params[base_i + xr.global_ordinal()]
+                for base_i in range(len(params))[::world_size]:
+                    if base_i + rank < len(params):
+                        p = params[base_i + rank]
                         if p.grad is None:
                             # continue
                             p.grad = torch.zeros_like(p)  # Force synchronization
@@ -248,10 +267,23 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         )
                         p.mul_(1 - group["lr"] * group["weight_decay"])
                         p.add_(update.reshape(p.shape), alpha=-group["lr"])
-                    xm.all_gather(
-                        value=params_pad[base_i + xr.global_ordinal()],
-                        output=params_pad[base_i : base_i + xr.world_size()],
+
+                    out_shape = list(params_pad[base_i + rank].shape)
+                    out_shape[0] *= world_size
+                    gathered_concat = torch.empty(
+                        out_shape,
+                        dtype=params_pad[base_i + rank].dtype,
+                        device=params_pad[base_i + rank].device,
                     )
+                    xm.all_gather(params_pad[base_i + rank], dim=0, output=gathered_concat)
+                    gathered_chunks = torch.chunk(gathered_concat, world_size, dim=0)
+                    for i in range(world_size):
+                        params_pad[base_i + i].copy_(gathered_chunks[i])
+
+                    # dist.all_gather(
+                    #     tensor_list=params_pad[base_i : base_i + dist.get_world_size()],
+                    #     tensor=params_pad[base_i + dist.get_rank()],
+                    # )
             else:
                 for p in group["params"]:
                     if p.grad is None:
