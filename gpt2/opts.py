@@ -226,6 +226,12 @@ def _add_common_training_opts(parser: argparse.ArgumentParser) -> None:
         default=6.0e-5,
     )
     group.add_argument(
+        "--stable-steps",
+        type=int,
+        help="Number of steps to maintain constant learning rate (for wsd decay only)",
+        default=15_000,
+    )
+    group.add_argument(
         "--decay-steps",
         type=int,
         help="Number of steps to decay learning rate (for cosine decay only)",
