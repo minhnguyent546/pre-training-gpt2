@@ -41,18 +41,6 @@ def scaled_dot_product_attention(
     return output
 
 
-def get_activation(act_type: str) -> nn.Module:
-    act_type = act_type.lower()
-    if act_type == "relu":
-        return nn.ReLU()
-    elif act_type == "gelu":
-        return nn.GELU(approximate="tanh")
-    else:
-        raise ValueError(
-            f'Unsupported activation function: {act_type}. Possible values are "relu", "gelu".'
-        )
-
-
 def get_device(device: Union[torch.device, str] = "auto") -> torch.device:
     if isinstance(device, torch.device):
         return device
@@ -115,16 +103,15 @@ class CausalMultiHeadSelfAttention(nn.Module):
 
 
 class PositionWiseFeedForward(nn.Module):
-    def __init__(self, d_model: int, d_ff: int, activation: str, dropout: float):
+    def __init__(self, d_model: int, d_ff: int, dropout: float):
         super().__init__()
         self.linear = nn.Linear(d_model, d_ff)
         self.rl_projection = nn.Linear(d_ff, d_model)
-        self.activation = get_activation(activation)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.linear(x)
-        x = self.activation(x)
+        x = Fun.relu(x).square()
         x = self.dropout(x)
         x = self.rl_projection(x)
         return x
@@ -140,7 +127,6 @@ class GPTConfig:
     d_ff: int = 3072
     dropout: float = 0.0
     eps: float = 1e-7
-    activation: str = "gelu"
     tie_weights: bool = True
 
 
@@ -158,7 +144,6 @@ class GPTDecoderBlock(nn.Module):
         self.position_wise_ffn = PositionWiseFeedForward(
             config.d_model,
             config.d_ff,
-            activation=config.activation,
             dropout=config.dropout,
         )
 
