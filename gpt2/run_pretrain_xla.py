@@ -7,7 +7,6 @@ from contextlib import nullcontext
 from typing import Any
 
 import torch
-import torch.amp
 import torch.distributed as dist
 import torch.nn as nn
 import torch.version
@@ -52,6 +51,7 @@ def train_model(args: argparse.Namespace):
         f"Pytorch version {torch.version.__version__} compiled for CUDA {torch.version.cuda}"
     )
     master_print(f"Pytorch XLA version {torch_xla.__version__}")
+    master_print(f"Args: {vars(args)}")
 
     # training device
     device = xm.xla_device()
@@ -199,6 +199,7 @@ def train_model(args: argparse.Namespace):
         eps=args.adam_eps,
         weight_decay=args.weight_decay,
         use_syncfree_optim=autocast_enabled and args.use_syncfree_optim,
+        muon_lr=args.muon_lr,
     )
     if args.lr_schedule == "noam":
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -297,6 +298,9 @@ def train_model(args: argparse.Namespace):
             notes=args.wandb_notes,
             id=args.wandb_resume_id,
             resume="must" if args.wandb_resume_id is not None else None,
+        )
+        master_print(
+            f"Wandb logging enabled. project: {args.wandb_project}, name: {args.wandb_name}, id: {wandb_run.id}"
         )
 
     # training loop

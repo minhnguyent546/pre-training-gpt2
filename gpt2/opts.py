@@ -176,7 +176,7 @@ def _add_common_training_opts(parser: argparse.ArgumentParser) -> None:
         "--optim-type",
         type=str,
         help="Which optimizer to use",
-        choices=["adam", "adamw"],
+        choices=["adam", "adamw", "muon"],
         default="adamw",
     )
     group.add_argument(
@@ -184,6 +184,12 @@ def _add_common_training_opts(parser: argparse.ArgumentParser) -> None:
         type=float,
         help="Learning rate",
         default=6.0e-4,
+    )
+    group.add_argument(
+        "--muon-lr",
+        type=float,
+        help="Learning rate for Muon optimizer",
+        default=6.0e-3,
     )
     group.add_argument(
         "--adam-betas",

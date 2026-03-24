@@ -19,6 +19,8 @@ if "PJRT_DEVICE" in os.environ:
     import torch_xla as xla  # noqa: F401
     import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
 
+from gpt2.muon import MuonWithAuxAdam
+
 
 def set_seed(seed: int = 0x3F3F3F3F):
     random.seed(seed)
@@ -85,22 +87,57 @@ def make_optimizer(
     eps: float = 1e-8,
     weight_decay: float = 0.0,
     use_syncfree_optim: bool = False,
+    muon_lr: float | None = None,
 ) -> torch.optim.Optimizer:
-    param_list = [param for param in model.parameters() if param.requires_grad]
-    decay_params = [param for param in param_list if param.dim() >= 2]
-    no_decay_params = [param for param in param_list if param.dim() < 2]
-    param_groups = [
-        {"params": decay_params, "weight_decay": weight_decay},
-        {"params": no_decay_params, "weight_decay": 0.0},
-    ]
     optim_type = optim_type.lower()
     use_fused_impl = device.type == "cuda"
-    if optim_type == "adam":
-        adam_optim = syncfree.Adam if use_syncfree_optim else torch.optim.Adam
-        optimizer = adam_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
-    elif optim_type == "adamw":
-        adamw_optim = syncfree.AdamW if use_syncfree_optim else torch.optim.AdamW
-        optimizer = adamw_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
+    if optim_type == "muon":
+        if muon_lr is None:
+            raise ValueError("Muon optimizer requires specifying `muon_lr`")
+        hidden_weights = [p for p in model.decoder_blocks.parameters() if p.ndim >= 2]
+        hidden_gains_biases = [p for p in model.decoder_blocks.parameters() if p.ndim < 2]
+        nonhidden_params = [
+            *model.token_embedding.parameters(),
+            *model.positional_embedding.parameters(),
+            *model.layer_norm.parameters(),
+        ]
+        if not model.config.tie_weights:
+            nonhidden_params.extend(model.lm_head.parameters())
+        param_groups = [
+            {
+                "params": hidden_weights,
+                "use_muon": True,
+                "lr": muon_lr,
+                "weight_decay": weight_decay,
+                "momentum": 0.95,
+            },
+            {
+                "params": nonhidden_params + hidden_gains_biases,
+                "use_muon": False,
+                "lr": lr,
+                "betas": betas,
+                "weight_decay": 0.0,
+                "eps": eps,
+            },
+        ]
+        optimizer = MuonWithAuxAdam(param_groups)
+    elif optim_type in ("adam", "adamw"):
+        param_list = [param for param in model.parameters() if param.requires_grad]
+        decay_params = [param for param in param_list if param.dim() >= 2]
+        no_decay_params = [param for param in param_list if param.dim() < 2]
+        param_groups = [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ]
+
+        if optim_type == "adam":
+            adam_optim = syncfree.Adam if use_syncfree_optim else torch.optim.Adam
+            optimizer = adam_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
+        else:
+            adamw_optim = syncfree.AdamW if use_syncfree_optim else torch.optim.AdamW
+            optimizer = adamw_optim(
+                param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl
+            )
     else:
         raise ValueError(
             f"Unsupported optimizer type: {optim_type}. Possible values are: adam, adamw"
