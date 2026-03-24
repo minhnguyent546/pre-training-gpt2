@@ -5,7 +5,7 @@ import os
 import random
 import unicodedata
 from pickle import Pickler, Unpickler
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import regex
@@ -252,3 +252,40 @@ def tensor_to_object(tensor, tensor_size, group=None):
 
 def get_perplexity(loss: float) -> float:
     return math.exp(loss)
+
+
+def get_wsd_schedule(
+    optimizer,
+    num_warmup_steps: int,
+    num_stable_steps: int,
+    num_decay_steps: int,
+    min_lr_ratio: float = 0.1,
+    decay_type: Literal["linear", "cosine", "1-sqrt"] = "1-sqrt",
+) -> torch.optim.lr_scheduler.LambdaLR:
+    def lr_lambda(current_step: int):
+        # 1. Warmup Phase: Linear increase from 0 to Peak LR
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+
+        # 2. Stable Phase: Maintain Peak LR (Multiplier = 1.0)
+        if current_step < num_warmup_steps + num_stable_steps:
+            return 1.0
+
+        # 3. Decay Phase: Cosine decay down to min_lr_ratio
+        decay_step = current_step - num_warmup_steps - num_stable_steps
+        if decay_step < num_decay_steps:
+            progress = float(decay_step) / float(max(1, num_decay_steps))
+            if decay_type == "linear":
+                factor = 1.0 - progress
+            elif decay_type == "cosine":
+                # factor = 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))
+                factor = 0.5 * (1.0 + math.cos(math.pi * progress))
+            elif decay_type == "1-sqrt":
+                factor = 1.0 - math.sqrt(progress)
+            factor = factor * (1.0 - min_lr_ratio) + min_lr_ratio
+            return max(0.0, factor)
+
+        # 4. Post-Training: Stay at min_lr_ratio
+        return min_lr_ratio
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)

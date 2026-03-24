@@ -214,11 +214,11 @@ def _add_common_training_opts(parser: argparse.ArgumentParser) -> None:
 
     # scheduler options
     group.add_argument(
-        "--decay-method",
+        "--lr-schedule",
         type=str,
-        help="Learning rate decay method (you might want to choose larger learning rate when using noam decay, e.g. 0.5)",
-        choices=["cosine", "noam"],
-        default="cosine",
+        help="Learning rate scheduler (you might want to choose larger learning rate when using noam decay, e.g. 0.5)",
+        choices=["cosine", "noam", "wsd"],
+        default="wsd",
     )
     group.add_argument(
         "--warmup-steps",
@@ -237,6 +237,13 @@ def _add_common_training_opts(parser: argparse.ArgumentParser) -> None:
         type=int,
         help="Number of steps to decay learning rate (for cosine decay only)",
         default=20_000,
+    )
+    group.add_argument(
+        "--decay-type",
+        type=str,
+        help="Type of decay (for wsd decay only)",
+        choices=["linear", "cosine", "1-sqrt"],
+        default="1-sqrt",
     )
 
     # others

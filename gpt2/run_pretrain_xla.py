@@ -172,6 +172,7 @@ def train_model(args: argparse.Namespace):
     if model.config.tie_weights:
         model.tie_weights()
 
+    xm.master_print(model)
     criterion = nn.CrossEntropyLoss(reduction="sum")
     eval_criterion = nn.CrossEntropyLoss()
     learning_rate = args.learning_rate
@@ -185,7 +186,7 @@ def train_model(args: argparse.Namespace):
         weight_decay=args.weight_decay,
         use_syncfree_optim=autocast_enabled and args.use_syncfree_optim,
     )
-    if args.decay_method == "noam":
+    if args.lr_schedule == "noam":
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: utils.noam_decay(
@@ -194,7 +195,7 @@ def train_model(args: argparse.Namespace):
                 args.warmup_steps,
             ),
         )
-    elif args.decay_method == "cosine":
+    elif args.lr_schedule == "cosine":
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: utils.cosine_decay(
@@ -206,8 +207,17 @@ def train_model(args: argparse.Namespace):
                 factor=1 / learning_rate,
             ),
         )
+    elif args.lr_schedule == "wsd":
+        lr_scheduler = utils.get_wsd_schedule(
+            optimizer,
+            num_warmup_steps=args.warmup_steps,
+            num_stable_steps=args.stable_steps,
+            num_decay_steps=args.decay_steps,
+            min_lr_ratio=args.min_lr / learning_rate,
+            decay_type=args.decay_type,
+        )
     else:
-        raise ValueError(f"Unsupported scheduler decay method: {args.decay_method}")
+        raise ValueError(f"Unsupported learning rate scheduler: {args.lr_schedule}")
 
     initial_step = 0
     if saved_states is not None:
