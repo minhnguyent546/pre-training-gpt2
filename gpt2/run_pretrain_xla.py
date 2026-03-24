@@ -379,6 +379,9 @@ def train_model(args: argparse.Namespace):
                 "loss/train": running_loss.average,
                 "loss/valid": valid_results["loss"],
             })
+            xm.master_print(
+                f"[step {global_step + 1} / {args.train_steps}] running_loss: {running_loss.average:0.4f} | valid loss: {valid_results['loss']:0.4f}"
+            )
             running_loss.reset()
 
         # log to wandb
@@ -479,11 +482,10 @@ def eval_model(
     device_hw = xm.xla_device_hw(device)
     if autocast_context is None:
         autocast_context = nullcontext()
-    progess_bar = tqdm(
+    progress_bar = tqdm(
         range(valid_steps),
         desc=f"{device_hw}:{xr.global_ordinal()} - Evaluating model",
         disable=xr.local_ordinal() != 0,
-        ncols=120,
     )
 
     running_loss = XLAAverageMeter("running_loss", device=device)
@@ -498,13 +500,14 @@ def eval_model(
         if labels.dim() == 3:
             assert labels.shape[0] == 1
             labels = labels[0]
+        num_items_in_batch = (labels != -100).sum()
         with autocast_context:
             logits = model(input_ids)
-            loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
+            loss = criterion(input=logits.view(-1, logits.size(-1)), target=labels.view(-1))
 
-        running_loss.update(loss.detach())
-        progess_bar.set_postfix({"loss": f"{loss:0.3f}"})
-        progess_bar.update()
+        running_loss.update(loss.detach(), num_items_in_batch)
+        progress_bar.set_postfix({"loss": f"{loss:0.3f}"})
+        progress_bar.update()
         if (batch_idx + 1) >= valid_steps:
             break
 
