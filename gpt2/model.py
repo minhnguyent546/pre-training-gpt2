@@ -111,7 +111,8 @@ class PositionWiseFeedForward(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.linear(x)
-        x = Fun.relu(x).square()
+        x = Fun.relu(x)
+        x = x * x  # calling `Fun.relu(x).square()` does not work with torch.compile()
         x = self.dropout(x)
         x = self.rl_projection(x)
         return x
