@@ -10,6 +10,7 @@ import torch
 import torch.amp
 import torch.distributed as dist
 import torch.nn as nn
+import torch.version
 import torch_xla as xla  # noqa: F401
 import torch_xla.amp
 import torch_xla.core.xla_model as xm
@@ -48,9 +49,9 @@ def train_model(args: argparse.Namespace):
 
     master_print(f"Python version: {sys.version}")
     master_print(
-        f"Pytorch version {torch.version.__version___} compiled for CUDA {torch.version.cuda}"
+        f"Pytorch version {torch.version.__version__} compiled for CUDA {torch.version.cuda}"
     )
-    master_print(f"Pytorch XLA version {xr.version()}")
+    master_print(f"Pytorch XLA version {torch_xla.__version__}")
 
     # training device
     device = xm.xla_device()
