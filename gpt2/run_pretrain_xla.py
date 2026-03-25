@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import subprocess
 import sys
 from contextlib import nullcontext
 from typing import Any
@@ -51,6 +52,11 @@ def train_model(args: argparse.Namespace):
         f"Pytorch version {torch.version.__version__} compiled for CUDA {torch.version.cuda}"
     )
     master_print(f"Pytorch XLA version {torch_xla.__version__}")
+    master_print(
+        subprocess.run(
+            ["nvidia-smi"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        ).stdout
+    )
     master_print(f"Args: {vars(args)}")
 
     # training device
