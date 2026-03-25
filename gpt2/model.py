@@ -14,9 +14,13 @@ from typing import Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as Fun
+from kernels import get_kernel
 from torch import Tensor
 
 import gpt2.utils as utils
+
+fa3 = get_kernel("kernels-community/flash-attn3")
+flash_attn_func = fa3.flash_attn_func
 
 
 def norm(x: Tensor) -> Tensor:
@@ -77,40 +81,58 @@ class CausalMultiHeadSelfAttention(nn.Module):
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = self.d_model // self.num_heads
-        self.attention_dropout = nn.Dropout(dropout)
+        # self.attention_dropout = nn.Dropout(dropout)
+        self.dropout_p = dropout
         self.residual_dropout = nn.Dropout(dropout)
-        self.softcapping = softcapping
+
+        self.softcapping = self.softcapping = softcapping if softcapping is not None else 0.0
+
         self.w_q = nn.Linear(d_model, d_model)
         self.w_k = nn.Linear(d_model, d_model)
         self.w_v = nn.Linear(d_model, d_model)
 
         self.rl_projection = nn.Linear(d_model, d_model)
-        self.register_buffer(
-            "causal_mask",
-            torch.tril(
-                torch.ones(max_seq_length, max_seq_length).unsqueeze_(0).unsqueeze_(0)
-            ).bool(),
-        )
+        # self.register_buffer(
+        #     "causal_mask",
+        #     torch.tril(
+        #         torch.ones(max_seq_length, max_seq_length).unsqueeze_(0).unsqueeze_(0)
+        #     ).bool(),
+        # )
 
     def forward(self, x: Tensor) -> Tensor:
         batch_size, seq_length, _ = x.size()
-        mask = self.causal_mask[..., :seq_length, :seq_length]
+        # mask = self.causal_mask[..., :seq_length, :seq_length]
 
         q = self.w_q(x)
         k = self.w_k(x)
         v = self.w_v(x)
 
-        # q, k, v: (batch_size, seq_length, d_model) -> (batch_size, num_heads, seq_length, d_k)
-        q = q.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        k = k.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        v = v.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        # # q, k, v: (batch_size, seq_length, d_model) -> (batch_size, num_heads, seq_length, d_k)
+        # q = q.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        # k = k.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        # v = v.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+
+        # Reshape for FA3: (batch_size, seq_length, num_heads, d_k)
+        q = q.view(batch_size, seq_length, self.num_heads, self.d_k)
+        k = k.view(batch_size, seq_length, self.num_heads, self.d_k)
+        v = v.view(batch_size, seq_length, self.num_heads, self.d_k)
 
         q = norm(q)
         k = norm(k)
 
-        y = scaled_dot_product_attention(
-            q, k, v, mask=mask, dropout=self.attention_dropout, softcapping=self.softcapping
+        # y = scaled_dot_product_attention(
+        #     q, k, v, mask=mask, dropout=self.attention_dropout, softcapping=self.softcapping
+        # )
+
+        y = flash_attn_func(
+            q,
+            k,
+            v,
+            dropout_p=self.dropout_p if self.training else 0.0,
+            causal=True,  # Replaces your manual mask logic
+            softcap=self.softcapping,  # Replaces your float() upcast and manual tanh()
         )
+
         y = y.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
         y = self.residual_dropout(self.rl_projection(y))
         return y
