@@ -81,8 +81,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = self.d_model // self.num_heads
-        # self.attention_dropout = nn.Dropout(dropout)
-        self.dropout_p = dropout
+        self.attention_dropout = nn.Dropout(dropout)
         self.residual_dropout = nn.Dropout(dropout)
 
         self.softcapping = self.softcapping = softcapping if softcapping is not None else 0.0
@@ -128,7 +127,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
             q,
             k,
             v,
-            dropout_p=self.dropout_p if self.training else 0.0,
+            # dropout_p=self.dropout_p if self.training else 0.0,  # FA3 does not support dropout!
             causal=True,  # Replaces your manual mask logic
             softcap=self.softcapping,  # Replaces your float() upcast and manual tanh()
         )
