@@ -193,7 +193,7 @@ def train_model(args: argparse.Namespace) -> None:
         weight_decay=args.weight_decay,
         muon_lr=args.muon_lr,
     )
-    if args.decay_method == "noam":
+    if args.lr_schedule == "noam":
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: utils.noam_decay(
@@ -202,7 +202,7 @@ def train_model(args: argparse.Namespace) -> None:
                 args.warmup_steps,
             ),
         )
-    elif args.decay_method == "cosine":
+    elif args.lr_schedule == "cosine":
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: utils.cosine_decay(
@@ -224,7 +224,7 @@ def train_model(args: argparse.Namespace) -> None:
             decay_type=args.decay_type,
         )
     else:
-        raise ValueError(f"Unsupported scheduler decay method: {args.decay_method}")
+        raise ValueError(f"Unsupported scheduler decay method: {args.lr_schedule}")
 
     initial_step = 0
     if saved_states is not None:
