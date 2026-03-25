@@ -10,7 +10,7 @@ dependencies = [
     "regex>=2024.5.15",
     "tokenizers>=0.19.1",
     "torch==2.8.0",
-    "torch_xla[tpu]==2.8.0",
+    "torch_xla[tpu,pallas]==2.8.0",
     "tqdm>=4.66.3",
     "datasets>=2.20.0",
     "wandb>=0.17.4",
