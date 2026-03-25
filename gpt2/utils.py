@@ -104,7 +104,6 @@ def make_optimizer(
         nonhidden_params = [
             *model.token_embedding.parameters(),
             *model.positional_embedding.parameters(),
-            *model.layer_norm.parameters(),
         ]
         if not model.config.tie_weights:
             nonhidden_params.extend(model.lm_head.parameters())
