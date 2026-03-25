@@ -15,6 +15,7 @@ import torch_xla.amp
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.parallel_loader as xpl
 import torch_xla.distributed.xla_backend  # required for `xla://` init_method and `xla` backend
+import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.runtime as xr
 import wandb
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
@@ -496,7 +497,7 @@ def main() -> None:
     opts.add_run_pretrain_xla_opts(parser)
     args = parser.parse_args()
 
-    torch_xla.launch(_mp_fn, args=(args,), start_method=args.mp_start_method)
+    xmp.spawn(_mp_fn, args=(args,), start_method=args.mp_start_method)
 
 
 @torch.no_grad()
