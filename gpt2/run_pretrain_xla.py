@@ -42,15 +42,15 @@ def train_model(args: argparse.Namespace):
     if args.wandb_logging and args.wandb_name is not None:
         checkpoints_dir_basename += f"-{args.wandb_name}"
 
-    checkpoint_dir = os.path.join(
+    checkpoints_dir = os.path.join(
         args.checkpoints_dir,
         checkpoints_dir_basename,
     )
-    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(checkpoints_dir, exist_ok=True)
     if args.wandb_logging and args.wandb_name is not None:
-        log_file = os.path.join(checkpoint_dir, f"{args.wandb_name}.log")
+        log_file = os.path.join(checkpoints_dir, f"{args.wandb_name}.log")
     else:
-        log_file = os.path.join(checkpoint_dir, "training.log")
+        log_file = os.path.join(checkpoints_dir, "training.log")
 
     def master_print(message: str, console: bool = True) -> None:
         if xm.is_master_ordinal(local=False):
