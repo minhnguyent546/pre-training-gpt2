@@ -340,6 +340,7 @@ def train_model(args: argparse.Namespace) -> None:
 
         grad_norm_value = 0.0
         if args.max_grad_norm > 0:
+            scaler.unscale_(optimizer)
             grad_norm_value = torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
                 max_norm=args.max_grad_norm,
@@ -393,7 +394,7 @@ def train_model(args: argparse.Namespace) -> None:
         if len(wandb_accum_logs) >= args.wandb_logging_interval or (
             len(wandb_accum_logs) > 0 and global_step + 1 >= args.train_steps
         ):
-            if args.ddp_enabbled:
+            if args.ddp_enabled:
                 batch_loss_values = torch.tensor(
                     [loss["loss/batch_loss"] for loss in wandb_accum_logs],
                     dtype=torch.float32,
