@@ -50,20 +50,8 @@ def get_device(device: Union[torch.device, str] = "auto") -> torch.device:
     return torch.device(device)
 
 
-class LayerNorm(nn.Module):
-    def __init__(self, features, eps: float = 1e-7):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(features))
-        self.bias = nn.Parameter(torch.zeros(features))
-        self.eps = eps
-
-    def forward(self, x: Tensor) -> Tensor:
-        mean = x.mean(dim=-1, keepdim=True)
-        var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
-        std = (var + self.eps).sqrt()
-        y = (x - mean) / std
-        output = self.weight * y + self.bias
-        return output
+def norm(x: Tensor) -> Tensor:
+    return Fun.rms_norm(x, (x.shape[-1],))
 
 
 class CausalMultiHeadSelfAttention(nn.Module):
@@ -134,14 +122,12 @@ class GPTConfig:
 class GPTDecoderBlock(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
-        self.layer_norm_1 = LayerNorm(config.d_model, eps=config.eps)
         self.causal_self_attention = CausalMultiHeadSelfAttention(
             config.d_model,
             config.num_heads,
             config.dropout,
             config.seq_length,
         )
-        self.layer_norm_2 = LayerNorm(config.d_model, eps=config.eps)
         self.position_wise_ffn = PositionWiseFeedForward(
             config.d_model,
             config.d_ff,
@@ -150,8 +136,8 @@ class GPTDecoderBlock(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         """see: https://github.com/openai/gpt-2/blob/master/src/model.py#L123"""
-        x = x + self.causal_self_attention(self.layer_norm_1(x))
-        x = x + self.position_wise_ffn(self.layer_norm_2(x))
+        x = x + self.causal_self_attention(norm(x))
+        x = x + self.position_wise_ffn(norm(x))
         return x
 
 
@@ -165,21 +151,18 @@ class GPT(nn.Module):
         self.decoder_blocks = nn.Sequential(*[
             GPTDecoderBlock(self.config) for _ in range(self.config.num_layers)
         ])
-        self.layer_norm = LayerNorm(
-            self.config.d_model, eps=self.config.eps
-        )  # additional layer normalization
         self.lm_head = nn.Linear(self.config.d_model, self.config.vocab_size, bias=False)
 
         self.post_init()
 
     def forward(self, ids: Tensor) -> Tensor:
-        batch_size, seq_length = ids.size()
+        _, seq_length = ids.size()
         token_embeddings = self.token_embedding(ids)
         pos = torch.arange(0, seq_length, dtype=torch.int64, device=ids.device)
         pos_embeddings = self.positional_embedding(pos)
         x = self.pe_dropout(token_embeddings + pos_embeddings)
         x = self.decoder_blocks(x)
-        x = self.layer_norm(x)
+        x = norm(x)
         logits = self.lm_head(x)  # (batch_size, seq_length, vocab_size)
         return logits
 
