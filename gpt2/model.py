@@ -64,7 +64,10 @@ class CausalMultiHeadSelfAttention(nn.Module):
         self.d_k = self.d_model // self.num_heads
         self.attention_dropout = nn.Dropout(dropout)
         self.residual_dropout = nn.Dropout(dropout)
-        self.w_qkv = nn.Linear(d_model, d_model * 3)
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, d_model)
+        self.w_v = nn.Linear(d_model, d_model)
+
         self.rl_projection = nn.Linear(d_model, d_model)
         self.register_buffer(
             "causal_mask",
@@ -77,7 +80,9 @@ class CausalMultiHeadSelfAttention(nn.Module):
         batch_size, seq_length, _ = x.size()
         mask = self.causal_mask[..., :seq_length, :seq_length]
 
-        q, k, v = self.w_qkv(x).split(self.d_model, dim=-1)
+        q = self.w_q(x)
+        k = self.w_k(x)
+        v = self.w_v(x)
 
         # q, k, v: (batch_size, seq_length, d_model) -> (batch_size, num_heads, seq_length, d_k)
         q = q.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
