@@ -14,7 +14,7 @@ import torch_xla  # noqa: F401
 import torch_xla.amp
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.parallel_loader as xpl
-import torch_xla.distributed.xla_backend  # required for `xla://` init_method and `xla` backend
+import torch_xla.distributed.xla_backend  #  required for `xla://` init_method and `xla` backend
 import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.runtime as xr
 import wandb
@@ -31,9 +31,11 @@ from gpt2.model import GPT, GPTConfig
 
 
 def train_model(args: argparse.Namespace):
+    # set seed
     utils.set_seed(args.seed)
     torch_xla.manual_seed(args.seed)
 
+    # log file
     checkpoints_dir = utils.ensure_dir(args.checkpoints_dir)
     log_file = os.path.join(checkpoints_dir, "training.log")
 
@@ -189,9 +191,9 @@ def train_model(args: argparse.Namespace):
     eval_criterion = nn.CrossEntropyLoss()
     learning_rate = args.learning_rate
     optimizer = utils.make_optimizer(
-        model,
-        device,
-        args.optim_type,
+        model=model,
+        device=device,
+        optim_type=args.optim_type,
         lr=learning_rate,
         betas=args.adam_betas,
         eps=args.adam_eps,
@@ -237,6 +239,7 @@ def train_model(args: argparse.Namespace):
         unwanted_prefixes = ["module.", "_orig_mod."]  # created by DDP() and torch.compile()
         for prefix in unwanted_prefixes:
             consume_prefix_in_state_dict_if_present(saved_states["model"], prefix=prefix)
+
         model.load_state_dict(saved_states["model"])
         optimizer.load_state_dict(saved_states["optimizer"])
         lr_scheduler.load_state_dict(saved_states["lr_scheduler"])
@@ -273,12 +276,12 @@ def train_model(args: argparse.Namespace):
 
     if args.do_test:
         valid_results = eval_model(
-            model,
-            device,
-            eval_criterion,
-            validation_device_loader,
-            args.valid_steps,
-            autocast_context,
+            model=model,
+            device=device,
+            criterion=eval_criterion,
+            eval_data_loader=validation_device_loader,
+            valid_steps=args.valid_steps,
+            autocast_context=autocast_context,
         )
         master_print("** Testing results **")
         master_print(f"Loss: {valid_results['loss']}")
@@ -387,7 +390,7 @@ def train_model(args: argparse.Namespace):
         })
 
         lr_scheduler.step()
-        running_loss.update(batch_loss, num_items_in_batch)
+        running_loss.update(batch_loss, num_items_in_batch)  # pyright: ignore[reportArgumentType]
 
         # run validation
         if (global_step + 1) % args.valid_interval == 0:
@@ -523,6 +526,7 @@ def eval_model(
     # set model in evaluation mode
     is_training = model.training
     model.eval()
+
     for batch_idx, (input_ids, labels) in enumerate(eval_data_loader):
         if input_ids.dim() == 3:
             assert input_ids.shape[0] == 1
