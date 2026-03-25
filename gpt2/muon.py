@@ -8,8 +8,14 @@ Modifed to work with torch_xla
 
 import torch
 import torch.distributed as dist
-import torch_xla  # noqa: F401
-import torch_xla.runtime as xr
+
+try:
+    import torch_xla  # noqa: F401
+    import torch_xla.runtime as xr
+
+    HAVE_TORCH_XLA = True
+except ImportError:
+    HAVE_TORCH_XLA = False
 
 
 def zeropower_via_newtonschulz5(G, steps: int):
@@ -87,6 +93,15 @@ class Muon(torch.optim.Optimizer):
         params = sorted(params, key=lambda x: x.size(), reverse=True)
         super().__init__(params, defaults)
 
+        self._WORLD_SIZE = 1
+        self._RANK = 0
+        if HAVE_TORCH_XLA:
+            self._WORLD_SIZE = xr.world_size()
+            self._RANK = xr.global_ordinal()
+        elif dist.is_initialized():
+            self._WORLD_SIZE = dist.get_world_size()
+            self._RANK = dist.get_rank()
+
     @torch.no_grad()
     def step(self, closure=None):
 
@@ -95,17 +110,14 @@ class Muon(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        world_size = xr.world_size()
-        rank = xr.global_ordinal()
-
         for group in self.param_groups:
             params = group["params"]
             params_pad = params + [torch.empty_like(params[-1])] * (
-                world_size - len(params) % world_size
+                self._WORLD_SIZE - len(params) % self._WORLD_SIZE
             )
-            for base_i in range(len(params))[::world_size]:
-                if base_i + rank < len(params):
-                    p = params[base_i + rank]
+            for base_i in range(len(params))[:: self._WORLD_SIZE]:
+                if base_i + self._RANK < len(params):
+                    p = params[base_i + self._RANK]
                     if p.grad is None:
                         # continue
                         p.grad = torch.zeros_like(p)  # Force synchronization
@@ -116,8 +128,8 @@ class Muon(torch.optim.Optimizer):
                     p.mul_(1 - group["lr"] * group["weight_decay"])
                     p.add_(update.reshape(p.shape), alpha=-group["lr"])
                 dist.all_gather(
-                    params_pad[base_i : base_i + world_size],
-                    params_pad[base_i + rank],
+                    params_pad[base_i : base_i + self._WORLD_SIZE],
+                    params_pad[base_i + self._RANK],
                 )
 
         return loss
@@ -223,6 +235,15 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                 }
         super().__init__(param_groups, {})
 
+        self._WORLD_SIZE = 1
+        self._RANK = 0
+        if HAVE_TORCH_XLA:
+            self._WORLD_SIZE = xr.world_size()
+            self._RANK = xr.global_ordinal()
+        elif dist.is_initialized():
+            self._WORLD_SIZE = dist.get_world_size()
+            self._RANK = dist.get_rank()
+
     @torch.no_grad()
     def step(self, closure=None):
 
@@ -231,17 +252,15 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        world_size = xr.world_size()
-        rank = xr.global_ordinal()
         for group in self.param_groups:
             if group["use_muon"]:
                 params = group["params"]
                 params_pad = params + [torch.empty_like(params[-1])] * (
-                    world_size - len(params) % world_size
+                    self._WORLD_SIZE - len(params) % self._WORLD_SIZE
                 )
-                for base_i in range(len(params))[::world_size]:
-                    if base_i + rank < len(params):
-                        p = params[base_i + rank]
+                for base_i in range(len(params))[:: self._WORLD_SIZE]:
+                    if base_i + self._RANK < len(params):
+                        p = params[base_i + self._RANK]
                         if p.grad is None:
                             # continue
                             p.grad = torch.zeros_like(p)  # Force synchronization
@@ -254,7 +273,8 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         p.mul_(1 - group["lr"] * group["weight_decay"])
                         p.add_(update.reshape(p.shape), alpha=-group["lr"])
                     dist.all_gather(
-                        params_pad[base_i : base_i + world_size], params_pad[base_i + rank]
+                        params_pad[base_i : base_i + self._WORLD_SIZE],
+                        params_pad[base_i + self._RANK],
                     )
             else:
                 for p in group["params"]:
