@@ -253,9 +253,11 @@ def train_model(args: argparse.Namespace):
     # compile the model
     if args.compile:
         master_print("Compiling the model")
-        model = torch_xla.compile(
+        model = torch.compile(
             model,
-            full_graph=True,
+            backend="openxla" if device.type == "xla" else "inductor",
+            dynamic=False,
+            fullgraph=True,
         )
 
     # wrap the model with DDP
