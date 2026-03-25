@@ -516,9 +516,12 @@ def eval_model(
     if autocast_context is None:
         autocast_context = nullcontext()
     progress_bar = tqdm(
-        range(valid_steps),
-        desc=f"{device_hw}:{xr.global_ordinal()} - Evaluating model",
+        total=valid_steps,
+        desc=f"{device_hw}:{xr.global_ordinal()}-Eval",
         disable=xr.local_ordinal() != 0,
+        position=1,
+        leave=False,
+        ncols=120,
     )
 
     running_loss = XLAAverageMeter("running_loss", device=device)
@@ -549,6 +552,7 @@ def eval_model(
     model.train(is_training)
     xm.rendezvous("all_reduce_evaluation_loss")
     running_loss.all_reduce()
+    progress_bar.close()
     return {
         "loss": running_loss.average,
     }

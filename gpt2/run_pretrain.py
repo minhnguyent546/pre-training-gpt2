@@ -496,16 +496,20 @@ def eval_model(
 
     if args.ddp_enabled:
         progress_bar = tqdm(
-            range(eval_steps),
             total=eval_steps,
-            desc=f"GPU{args.rank} - Evaluating model",
+            desc=f"GPU{args.rank}-Eval",
             disable=(not args.is_local_master),
+            position=1,
+            leave=False,
+            ncols=120,
         )
     else:
         progress_bar = tqdm(
-            range(eval_steps),
             total=eval_steps,
-            desc="Evaluating model",
+            desc="Evaluating",
+            position=1,
+            leave=False,
+            ncols=120,
         )
 
     # set model in evaluation mode
@@ -538,6 +542,8 @@ def eval_model(
 
     if args.ddp_enabled:
         evaluation_loss.reduce(dst=args.master_rank)
+
+    progress_bar.close()
 
     return {
         "loss": evaluation_loss.average,
