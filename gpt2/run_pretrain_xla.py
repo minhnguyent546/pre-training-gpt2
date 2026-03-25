@@ -73,12 +73,14 @@ def train_model(args: argparse.Namespace):
     train_batch_size = args.train_batch_size // xr.world_size()
     eval_batch_size = args.eval_batch_size // xr.world_size()
     effective_batch_size = train_batch_size * xr.world_size() * args.gradient_accum_step
+    tokens_per_fwdbwd = train_batch_size * args.seq_length * args.gradient_accum_step
     master_print(
         f"Effective batch size: {effective_batch_size} "
         f"(micro_batch_size={train_batch_size}, "
         f"gradient_accum_step={args.gradient_accum_step}, "
         f"num_devices={xr.world_size()})"
     )
+    master_print(f"Tokens per forward/backward pass: {tokens_per_fwdbwd}")
 
     # dataset
     train_lm_dataset = LMDataset(
@@ -314,6 +316,7 @@ def train_model(args: argparse.Namespace):
     global_step = initial_step
     wandb_accum_logs: list[dict[str, Any]] = []
     running_loss = XLAAverageMeter("running_losses", device=device)
+    token_seen: int = 0
 
     master_print(f"Model has {utils.count_model_param(raw_model) / 10**6:0.2f}M parameters")
     train_iter = tqdm(
@@ -361,6 +364,7 @@ def train_model(args: argparse.Namespace):
             batch_loss += loss.detach()
 
         batch_loss = batch_loss / num_items_in_batch
+        token_seen += tokens_per_fwdbwd
 
         if not args.ddp:
             xm.reduce_gradients(optimizer)
@@ -390,6 +394,7 @@ def train_model(args: argparse.Namespace):
         wandb_accum_logs[-1].update({
             "loss/batch_loss": batch_loss,
             "grad_norm": grad_norm_value,
+            "token_seen": token_seen,
             "step": global_step,
         })
 
@@ -459,12 +464,13 @@ def train_model(args: argparse.Namespace):
             xm.rendezvous("save_checkpoint")
 
         master_print(
-            f"[step {global_step + 1} / {args.train_steps}] loss: {batch_loss:0.4f} | grad_norm: {grad_norm_value:0.4f}",
+            f"[step {global_step + 1} / {args.train_steps}] loss: {batch_loss:0.4f} | grad_norm: {grad_norm_value:0.4f} | token_seen: {token_seen:0.2e}",
             console=False,
         )
         train_iter.set_postfix({
             "loss": f"{batch_loss:0.3f}",
             "grad_norm": f"{grad_norm_value:0.4f}",
+            "token_seen": f"{token_seen:0.2e}",
         })
         global_step += 1
         train_iter.update()

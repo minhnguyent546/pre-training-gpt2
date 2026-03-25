@@ -65,12 +65,14 @@ def train_model(args: argparse.Namespace) -> None:
     train_batch_size = args.train_batch_size // args.world_size
     eval_batch_size = args.eval_batch_size // args.world_size
     effective_batch_size = train_batch_size * args.world_size * args.gradient_accum_step
+    tokens_per_fwdbwd = train_batch_size * args.seq_length * args.gradient_accum_step
     master_print(
         f"Effective batch size: {effective_batch_size} "
         f"(micro_batch_size={train_batch_size}, "
         f"gradient_accum_step={args.gradient_accum_step}, "
         f"num_devices={args.world_size})"
     )
+    master_print(f"Tokens per forward/backward pass: {tokens_per_fwdbwd}")
 
     # dataset
     train_dataset = LMDataset(
@@ -293,7 +295,7 @@ def train_model(args: argparse.Namespace) -> None:
     global_step = initial_step
     wandb_accum_logs: list[dict[str, Any]] = []
     running_loss = AverageMeter("running_loss", device=device)
-    num_tokens_per_batch = train_batch_size * args.gradient_accum_step * args.seq_length
+    token_seen: int = 0
 
     # set model in training mode
     model.train()
@@ -341,8 +343,9 @@ def train_model(args: argparse.Namespace) -> None:
         if device.type == "cuda":
             torch.cuda.synchronize()
         batch_fb_time += time.perf_counter() - ts
-        batch_throughput = num_tokens_per_batch / batch_fb_time
+        batch_throughput = tokens_per_fwdbwd / batch_fb_time
         batch_throughput *= args.world_size  # estimate throughput across devices
+        token_seen += tokens_per_fwdbwd
 
         scaler.unscale_(optimizer)
         grad_norm_value = torch.nn.utils.clip_grad_norm_(
@@ -366,6 +369,7 @@ def train_model(args: argparse.Namespace) -> None:
             "loss/batch_loss": batch_loss,
             "grad_norm": grad_norm_value,
             "throughput": batch_throughput,
+            "token_seen": token_seen,
             "step": global_step,
         })
 
@@ -436,13 +440,13 @@ def train_model(args: argparse.Namespace) -> None:
             dist.barrier()
 
         master_print(
-            f"[step {global_step + 1} / {args.train_steps}] loss: {batch_loss:0.4f} | grad_norm: {grad_norm_value:0.4f}",
+            f"[step {global_step + 1} / {args.train_steps}] loss: {batch_loss:0.4f} | throughput: {batch_throughput:0.1f} tokens/s | grad_norm: {grad_norm_value:0.4f} | token_seen: {token_seen:0.2e}",
             console=False,
         )
         train_iter.set_postfix({
             "loss": f"{batch_loss:0.3f}",
-            "throughput": f"{batch_throughput:0.1f} tokens/s",
             "grad_norm": f"{grad_norm_value:0.3f}",
+            "token_seen": f"{token_seen:0.2e}",
         })
         global_step += 1
         train_iter.update()
