@@ -272,14 +272,14 @@ def train_model(args: argparse.Namespace) -> None:
     if args.ddp_enabled:
         train_iter = tqdm(
             range(initial_step, args.train_steps),
-            desc=f"GPU{args.rank} - Training model",
+            desc=f"GPU{args.rank}-Training",
             disable=(not args.is_local_master),
             ncols=120,
         )
     else:
         train_iter = tqdm(
             range(initial_step, args.train_steps),
-            desc="Training model",
+            desc="Training",
             ncols=120,
         )
 
@@ -436,8 +436,8 @@ def train_model(args: argparse.Namespace) -> None:
         )
         train_iter.set_postfix({
             "loss": f"{batch_loss:0.3f}",
-            "throughput": f"{batch_throughput:0.3f} tokens/s",
-            "grad_norm": f"{grad_norm_value:0.4f}",
+            "throughput": f"{batch_throughput:0.1f} tokens/s",
+            "grad_norm": f"{grad_norm_value:0.3f}",
         })
         global_step += 1
         train_iter.update()
