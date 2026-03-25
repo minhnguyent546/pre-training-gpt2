@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from contextlib import nullcontext
+from datetime import datetime
 from typing import Any
 
 import torch
@@ -36,9 +37,20 @@ def train_model(args: argparse.Namespace):
     utils.set_seed(args.seed)
     torch_xla.manual_seed(args.seed)
 
-    # log file
-    checkpoints_dir = utils.ensure_dir(args.checkpoints_dir)
-    log_file = os.path.join(checkpoints_dir, "training.log")
+    # checkpoint dir and log file
+    checkpoints_dir_basename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    if args.wandb_logging and args.wandb_name is not None:
+        checkpoints_dir_basename += f"-{args.wandb_name}"
+
+    checkpoint_dir = os.path.join(
+        args.checkpoints_dir,
+        checkpoints_dir_basename,
+    )
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    if args.wandb_logging and args.wandb_name is not None:
+        log_file = os.path.join(checkpoint_dir, f"{args.wandb_name}.log")
+    else:
+        log_file = os.path.join(checkpoint_dir, "training.log")
 
     def master_print(message: str, console: bool = True) -> None:
         if xm.is_master_ordinal(local=False):
