@@ -89,6 +89,9 @@ class CausalMultiHeadSelfAttention(nn.Module):
         k = k.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         v = v.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
+        q = norm(q)
+        k = norm(k)
+
         y = scaled_dot_product_attention(q, k, v, mask=mask, dropout=self.attention_dropout)
         y = y.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
         y = self.residual_dropout(self.rl_projection(y))
