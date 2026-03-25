@@ -370,15 +370,13 @@ def train_model(args: argparse.Namespace):
             if param.grad is not None:
                 param.grad.div_(num_items_in_batch)
 
-        grad_norm_value = 0.0
-        if args.max_grad_norm > 0:
-            grad_norm_value = torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=args.max_grad_norm,
-                norm_type=2,
-            )
-            if bool(torch.isinf(grad_norm_value)) or bool(torch.isnan(grad_norm_value)):
-                grad_norm_value = 0.0
+        grad_norm_value = torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            max_norm=(args.max_grad_norm if args.max_grad_norm > 0 else float("inf")),
+            norm_type=2,
+        )
+        if bool(torch.isinf(grad_norm_value)) or bool(torch.isnan(grad_norm_value)):
+            grad_norm_value = -1.0
 
         scaler.step(optimizer)
         scaler.update()

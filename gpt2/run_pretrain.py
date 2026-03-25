@@ -344,16 +344,14 @@ def train_model(args: argparse.Namespace) -> None:
         batch_throughput = num_tokens_per_batch / batch_fb_time
         batch_throughput *= args.world_size  # estimate throughput across devices
 
-        grad_norm_value = 0.0
-        if args.max_grad_norm > 0:
-            scaler.unscale_(optimizer)
-            grad_norm_value = torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=args.max_grad_norm,
-                norm_type=2,
-            )
-            if bool(torch.isinf(grad_norm_value)) or bool(torch.isnan(grad_norm_value)):
-                grad_norm_value = -1
+        scaler.unscale_(optimizer)
+        grad_norm_value = torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            max_norm=(args.max_grad_norm if args.max_grad_norm > 0 else float("inf")),
+            norm_type=2,
+        )
+        if bool(torch.isinf(grad_norm_value)) or bool(torch.isnan(grad_norm_value)):
+            grad_norm_value = -1
 
         scaler.step(optimizer)
         scaler.update()
