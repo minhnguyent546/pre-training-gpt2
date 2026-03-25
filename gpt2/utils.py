@@ -15,9 +15,13 @@ import torch.nn.functional as Fun
 import yaml
 from torch import Tensor
 
-if "PJRT_DEVICE" in os.environ:
+try:
     import torch_xla  # noqa: F401
-    import torch_xla.amp.syncfree as syncfree  # provide modified version of optimizers to avoid the additional sync between device and host
+    import torch_xla.amp.syncfree as xla_syncfree
+
+    HAVE_TORCH_XLA = True
+except ImportError:
+    HAVE_TORCH_XLA = False
 
 from gpt2.muon import MuonWithAuxAdam
 
@@ -91,6 +95,7 @@ def make_optimizer(
 ) -> torch.optim.Optimizer:
     optim_type = optim_type.lower()
     use_fused_impl = device.type == "cuda"
+
     if optim_type == "muon":
         if muon_lr is None:
             raise ValueError("Muon optimizer requires specifying `muon_lr`")
@@ -122,6 +127,12 @@ def make_optimizer(
         ]
         optimizer = MuonWithAuxAdam(param_groups)
     elif optim_type in ("adam", "adamw"):
+        if use_syncfree_optim and not HAVE_TORCH_XLA:
+            raise ValueError(
+                "Sync-free optimizer requires torch_xla.amp.syncfree, but it is unavailable. "
+                "Install torch-xla or disable `use_syncfree_optim`."
+            )
+
         param_list = [param for param in model.parameters() if param.requires_grad]
         decay_params = [param for param in param_list if param.dim() >= 2]
         no_decay_params = [param for param in param_list if param.dim() < 2]
@@ -131,10 +142,10 @@ def make_optimizer(
         ]
 
         if optim_type == "adam":
-            adam_optim = syncfree.Adam if use_syncfree_optim else torch.optim.Adam
+            adam_optim = xla_syncfree.Adam if use_syncfree_optim else torch.optim.Adam
             optimizer = adam_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
         else:
-            adamw_optim = syncfree.AdamW if use_syncfree_optim else torch.optim.AdamW
+            adamw_optim = xla_syncfree.AdamW if use_syncfree_optim else torch.optim.AdamW
             optimizer = adamw_optim(
                 param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl
             )

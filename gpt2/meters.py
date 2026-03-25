@@ -1,13 +1,16 @@
-import os
 from typing import Any
 
 import torch
 import torch.distributed as dist
 
-if "PJRT_DEVICE" in os.environ:
+try:
     import torch_xla  # noqa: F401
     import torch_xla.core.xla_model as xm
     import torch_xla.runtime as xr
+
+    HAVE_TORCH_XLA = True
+except ImportError:
+    HAVE_TORCH_XLA = False
 
 import gpt2.utils as utils
 
