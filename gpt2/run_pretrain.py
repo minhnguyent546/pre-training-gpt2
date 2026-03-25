@@ -157,6 +157,8 @@ def train_model(args: argparse.Namespace) -> None:
             d_ff=args.d_ff,
             dropout=args.dropout,
             tie_weights=args.tie_weights,
+            attn_logit_softcapping=args.attn_logit_softcapping,
+            final_logit_softcapping=args.final_logit_softcapping,
         )
         model = GPT(gpt_config)
     elif args.from_checkpoint in pretrained_models:
@@ -170,6 +172,8 @@ def train_model(args: argparse.Namespace) -> None:
             d_ff=args.d_ff,
             dropout=args.dropout,
             tie_weights=args.tie_weights,
+            attn_logit_softcapping=args.attn_logit_softcapping,
+            final_logit_softcapping=args.final_logit_softcapping,
         )
         if args.ddp_enabled:
             if args.is_local_master:

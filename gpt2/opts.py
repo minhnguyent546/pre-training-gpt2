@@ -107,6 +107,18 @@ def _add_model_opts(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Whether to tie weights between input and output embeddings",
     )
+    group.add_argument(
+        "--attn-logit-softcapping",
+        type=float,
+        help="Softcapping value for attention logits",
+        default=50.0,
+    )
+    group.add_argument(
+        "--final-logit-softcapping",
+        type=float,
+        help="Softcapping value for final logits",
+        default=30.0,
+    )
 
 
 def _add_wandb_opts(parser: argparse.ArgumentParser) -> None:

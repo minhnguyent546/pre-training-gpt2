@@ -19,15 +19,27 @@ from torch import Tensor
 import gpt2.utils as utils
 
 
+def norm(x: Tensor) -> Tensor:
+    return Fun.rms_norm(x, (x.shape[-1],))
+
+
+def softcap(x: Tensor, cap: float) -> Tensor:
+    return torch.tanh(x / cap) * cap
+
+
 def scaled_dot_product_attention(
     query: Tensor,
     key: Tensor,
     value: Tensor,
     mask: Optional[Tensor] = None,
     dropout: Optional[Union[float, nn.Dropout]] = None,
+    softcapping: Optional[float] = None,
 ) -> Tensor:
     d_k = query.size(-1)
     attention_probs = (query @ key.transpose(-2, -1)) / math.sqrt(d_k)
+    if softcapping is not None:
+        attention_probs = attention_probs.float()
+        attention_probs = softcap(attention_probs, softcapping)
     if mask is not None:
         attention_probs.masked_fill_(mask == False, float("-inf"))  # noqa: E712
 
@@ -50,12 +62,15 @@ def get_device(device: Union[torch.device, str] = "auto") -> torch.device:
     return torch.device(device)
 
 
-def norm(x: Tensor) -> Tensor:
-    return Fun.rms_norm(x, (x.shape[-1],))
-
-
 class CausalMultiHeadSelfAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, dropout: float, max_seq_length: int):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        dropout: float,
+        max_seq_length: int,
+        softcapping: Optional[float] = None,
+    ):
         super().__init__()
         if not d_model % num_heads == 0:
             raise ValueError("d_model must be divisible by num_heads")
@@ -64,6 +79,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
         self.d_k = self.d_model // self.num_heads
         self.attention_dropout = nn.Dropout(dropout)
         self.residual_dropout = nn.Dropout(dropout)
+        self.softcapping = softcapping
         self.w_q = nn.Linear(d_model, d_model)
         self.w_k = nn.Linear(d_model, d_model)
         self.w_v = nn.Linear(d_model, d_model)
@@ -92,7 +108,9 @@ class CausalMultiHeadSelfAttention(nn.Module):
         q = norm(q)
         k = norm(k)
 
-        y = scaled_dot_product_attention(q, k, v, mask=mask, dropout=self.attention_dropout)
+        y = scaled_dot_product_attention(
+            q, k, v, mask=mask, dropout=self.attention_dropout, softcapping=self.softcapping
+        )
         y = y.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
         y = self.residual_dropout(self.rl_projection(y))
         return y
@@ -125,6 +143,8 @@ class GPTConfig:
     dropout: float = 0.0
     eps: float = 1e-7
     tie_weights: bool = True
+    attn_logit_softcapping: Optional[float] = None
+    final_logit_softcapping: Optional[float] = None
 
 
 class GPTDecoderBlock(nn.Module):
@@ -135,6 +155,7 @@ class GPTDecoderBlock(nn.Module):
             config.num_heads,
             config.dropout,
             config.seq_length,
+            config.attn_logit_softcapping,
         )
         self.position_wise_ffn = PositionWiseFeedForward(
             config.d_model,
@@ -172,6 +193,9 @@ class GPT(nn.Module):
         x = self.decoder_blocks(x)
         x = norm(x)
         logits = self.lm_head(x)  # (batch_size, seq_length, vocab_size)
+        if self.config.final_logit_softcapping is not None:
+            logits = logits.float()
+            logits = softcap(logits, self.config.final_logit_softcapping)
         return logits
 
     def post_init(self) -> None:
