@@ -479,10 +479,12 @@ def train_model(args: argparse.Namespace):
                 xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=False)
             xm.rendezvous("save_checkpoint")
 
-        master_print(
-            f"[step {global_step + 1} / {args.train_steps}] loss: {batch_loss:0.4f} | grad_norm: {grad_norm_value:0.4f} | token_seen: {token_seen:0.2e}",
-            console=False,
-        )
+        if (global_step + 1) % args.log_interval == 0 or global_step + 1 == args.train_steps:
+            master_print(
+                f"[step {global_step + 1} / {args.train_steps}] loss: {batch_loss:0.4f} | grad_norm: {grad_norm_value:0.4f} | token_seen: {token_seen:0.2e}",
+                console=False,
+            )
+
         train_iter.set_postfix({
             "loss": f"{batch_loss:0.3f}",
             "grad_norm": f"{grad_norm_value:0.4f}",

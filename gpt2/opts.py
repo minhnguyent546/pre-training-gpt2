@@ -144,7 +144,7 @@ def _add_wandb_opts(parser: argparse.ArgumentParser) -> None:
         "--wandb-logging-interval",
         type=int,
         help="Time between syncing metrics to wandb",
-        default=500,
+        default=100,
     )
     group.add_argument(
         "--wandb-resume-id",
@@ -305,6 +305,12 @@ def _add_common_training_opts(parser: argparse.ArgumentParser) -> None:
         type=int,
         help="Steps between validation",
         default=1_000,
+    )
+    group.add_argument(
+        "--log-interval",
+        type=int,
+        help="Steps between logging to file",
+        default=10,
     )
     group.add_argument(
         "--save-interval",
