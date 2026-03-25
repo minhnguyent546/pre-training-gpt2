@@ -495,6 +495,7 @@ def eval_model(
     eval_steps: int,
     args: argparse.Namespace,
     autocast_context=None,
+    show_progress_bar: bool = False,
 ) -> dict[str, float]:
     evaluation_loss = AverageMeter("evaluation_loss", device=device)
     if autocast_context is None:
@@ -504,7 +505,7 @@ def eval_model(
         progress_bar = tqdm(
             total=eval_steps,
             desc=f"GPU{args.rank}-Eval",
-            disable=(not args.is_local_master),
+            disable=(not args.is_local_master) or (not show_progress_bar),
             position=1,
             leave=False,
             ncols=120,
@@ -513,6 +514,7 @@ def eval_model(
         progress_bar = tqdm(
             total=eval_steps,
             desc="Evaluating",
+            disabled=(not show_progress_bar),
             position=1,
             leave=False,
             ncols=120,

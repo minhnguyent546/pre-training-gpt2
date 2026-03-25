@@ -517,6 +517,7 @@ def eval_model(
     eval_data_loader,
     valid_steps: int,
     autocast_context=None,
+    show_progress_bar: bool = False,
 ) -> dict[str, float]:
     device_hw = xm.xla_device_hw(device)
     if autocast_context is None:
@@ -524,7 +525,7 @@ def eval_model(
     progress_bar = tqdm(
         total=valid_steps,
         desc=f"{device_hw}:{xr.global_ordinal()}-Eval",
-        disable=xr.local_ordinal() != 0,
+        disable=(xr.local_ordinal() != 0) or (not show_progress_bar),
         position=1,
         leave=False,
         ncols=120,
