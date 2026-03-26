@@ -335,6 +335,9 @@ def train_model(args: argparse.Namespace) -> None:
             try:
                 input_ids, labels = next(train_loader_iter)
             except StopIteration:
+                master_print(
+                    f"DataLoader is exhausted at step {global_step}, restarting the DataLoader for the next epoch."
+                )
                 train_loader_iter = iter(train_dataset)
                 input_ids, labels = next(train_loader_iter)
 
