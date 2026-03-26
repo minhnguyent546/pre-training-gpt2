@@ -8,19 +8,30 @@ references:
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Callable
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as Fun
-from kernels import get_kernel
 from torch import Tensor
 
 import gpt2.utils as utils
 
-fa3 = get_kernel("kernels-community/flash-attn3")
-flash_attn_func = fa3.flash_attn_func
+USE_FLASH_ATTN = os.getenv("USE_FLASH_ATTN") == "1"
+
+if USE_FLASH_ATTN:
+    try:
+        from kernels import get_kernel
+    except ImportError as err:
+        raise ImportError(
+            "USE_FLASH_ATTN is set to 1 but `kernels` module is not available."
+        ) from err
+    fa3 = get_kernel("kernels-community/flash-attn3")
+    flash_attn_func: Callable[..., Tensor] | None = fa3.flash_attn_func
+else:
+    flash_attn_func = None
 
 
 def norm(x: Tensor) -> Tensor:
@@ -35,13 +46,13 @@ def scaled_dot_product_attention(
     query: Tensor,
     key: Tensor,
     value: Tensor,
-    mask: Optional[Tensor] = None,
-    dropout: Optional[Union[float, nn.Dropout]] = None,
-    softcapping: Optional[float] = None,
+    mask: Tensor | None = None,
+    dropout: float | nn.Dropout | None = None,
+    softcapping: float | None = None,
 ) -> Tensor:
     d_k = query.size(-1)
     attention_probs = (query @ key.transpose(-2, -1)) / math.sqrt(d_k)
-    if softcapping is not None:
+    if softcapping is not None and softcapping > 0.0:
         attention_probs = attention_probs.float()
         attention_probs = softcap(attention_probs, softcapping)
     if mask is not None:
@@ -57,7 +68,7 @@ def scaled_dot_product_attention(
     return output
 
 
-def get_device(device: Union[torch.device, str] = "auto") -> torch.device:
+def get_device(device: torch.device | str = "auto") -> torch.device:
     if isinstance(device, torch.device):
         return device
 
@@ -73,7 +84,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
         num_heads: int,
         dropout: float,
         max_seq_length: int,
-        softcapping: Optional[float] = None,
+        softcapping: float | None = None,
     ):
         super().__init__()
         if not d_model % num_heads == 0:
@@ -83,54 +94,69 @@ class CausalMultiHeadSelfAttention(nn.Module):
         self.d_k = self.d_model // self.num_heads
         self.attention_dropout = nn.Dropout(dropout)
         self.residual_dropout = nn.Dropout(dropout)
+        self.use_flash_attn = USE_FLASH_ATTN
 
-        self.softcapping = self.softcapping = softcapping if softcapping is not None else 0.0
+        self.softcapping = softcapping if softcapping is not None else 0.0
+        self.flash_attn_func = flash_attn_func
+        if self.use_flash_attn and self.flash_attn_func is None:
+            raise RuntimeError("USE_FLASH_ATTN=1 but flash-attn3 kernel is not available")
 
         self.w_q = nn.Linear(d_model, d_model)
         self.w_k = nn.Linear(d_model, d_model)
         self.w_v = nn.Linear(d_model, d_model)
 
         self.rl_projection = nn.Linear(d_model, d_model)
-        # self.register_buffer(
-        #     "causal_mask",
-        #     torch.tril(
-        #         torch.ones(max_seq_length, max_seq_length).unsqueeze_(0).unsqueeze_(0)
-        #     ).bool(),
-        # )
+        if not self.use_flash_attn:
+            self.register_buffer(
+                "causal_mask",
+                torch.tril(
+                    torch.ones(max_seq_length, max_seq_length).unsqueeze_(0).unsqueeze_(0)
+                ).bool(),
+            )
 
     def forward(self, x: Tensor) -> Tensor:
         batch_size, seq_length, _ = x.size()
-        # mask = self.causal_mask[..., :seq_length, :seq_length]
 
         q = self.w_q(x)
         k = self.w_k(x)
         v = self.w_v(x)
 
-        # # q, k, v: (batch_size, seq_length, d_model) -> (batch_size, num_heads, seq_length, d_k)
-        # q = q.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        # k = k.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        # v = v.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        if self.use_flash_attn and self.flash_attn_func is not None:
+            # Reshape for FA3: (batch_size, seq_length, num_heads, d_k)
+            q = q.view(batch_size, seq_length, self.num_heads, self.d_k)
+            k = k.view(batch_size, seq_length, self.num_heads, self.d_k)
+            v = v.view(batch_size, seq_length, self.num_heads, self.d_k)
 
-        # Reshape for FA3: (batch_size, seq_length, num_heads, d_k)
-        q = q.view(batch_size, seq_length, self.num_heads, self.d_k)
-        k = k.view(batch_size, seq_length, self.num_heads, self.d_k)
-        v = v.view(batch_size, seq_length, self.num_heads, self.d_k)
+            q = norm(q)
+            k = norm(k)
 
-        q = norm(q)
-        k = norm(k)
+            # FA3 does not support dropout (https://github.com/Dao-AILab/flash-attention/issues/1377#issuecomment-2529622590)
+            y = self.flash_attn_func(
+                q,
+                k,
+                v,
+                causal=True,
+                softcap=self.softcapping,
+            )
+        else:
+            mask = self.get_buffer("causal_mask")[..., :seq_length, :seq_length]
 
-        # y = scaled_dot_product_attention(
-        #     q, k, v, mask=mask, dropout=self.attention_dropout, softcapping=self.softcapping
-        # )
+            # q, k, v: (batch_size, seq_length, d_model) -> (batch_size, num_heads, seq_length, d_k)
+            q = q.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+            k = k.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+            v = v.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
-        y = flash_attn_func(
-            q,
-            k,
-            v,
-            # dropout_p=self.dropout_p if self.training else 0.0,  # FA3 does not support dropout!
-            causal=True,  # Replaces your manual mask logic
-            softcap=self.softcapping,  # Replaces your float() upcast and manual tanh()
-        )
+            q = norm(q)
+            k = norm(k)
+
+            y = scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                mask=mask,
+                dropout=self.attention_dropout,
+                softcapping=self.softcapping,
+            )
 
         y = y.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
         y = self.residual_dropout(self.rl_projection(y))
@@ -164,8 +190,8 @@ class GPTConfig:
     dropout: float = 0.0
     eps: float = 1e-7
     tie_weights: bool = True
-    attn_logit_softcapping: Optional[float] = None
-    final_logit_softcapping: Optional[float] = None
+    attn_logit_softcapping: float | None = None
+    final_logit_softcapping: float | None = None
 
 
 class GPTDecoderBlock(nn.Module):
@@ -214,7 +240,10 @@ class GPT(nn.Module):
         x = self.decoder_blocks(x)
         x = norm(x)
         logits = self.lm_head(x)  # (batch_size, seq_length, vocab_size)
-        if self.config.final_logit_softcapping is not None:
+        if (
+            self.config.final_logit_softcapping is not None
+            and self.config.final_logit_softcapping > 0.0
+        ):
             logits = logits.float()
             logits = softcap(logits, self.config.final_logit_softcapping)
         return logits
@@ -414,7 +443,9 @@ class GPT(nn.Module):
         )
         self.positional_embedding.num_embeddings = seq_length
         for block in self.decoder_blocks:
-            if hasattr(block.causal_self_attention, "causal_mask"):
+            if isinstance(block, GPTDecoderBlock) and hasattr(
+                block.causal_self_attention, "causal_mask"
+            ):
                 block.causal_self_attention.causal_mask = block.causal_self_attention.causal_mask[
                     :, :, :seq_length, :seq_length
                 ]
