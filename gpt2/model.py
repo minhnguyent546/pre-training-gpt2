@@ -239,7 +239,8 @@ class GPT(nn.Module):
         token_embeddings = self.token_embedding(ids)
         pos = torch.arange(0, seq_length, dtype=torch.int64, device=ids.device)
         pos_embeddings = self.positional_embedding(pos)
-        x = self.pe_dropout(token_embeddings + pos_embeddings)
+        # x = self.pe_dropout(token_embeddings + pos_embeddings)
+        x = token_embeddings + pos_embeddings
         x = self.decoder_blocks(x)
         x = norm(x)
         logits = self.lm_head(x)  # (batch_size, seq_length, vocab_size)
