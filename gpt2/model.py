@@ -138,6 +138,8 @@ class CausalMultiHeadSelfAttention(nn.Module):
                 causal=True,
                 softcap=self.softcapping,
             )
+            # returned shape is (batch_size, seq_length, num_heads, d_k), reshape back to (batch_size, seq_length, d_model)
+            y = y.reshape(batch_size, -1, self.d_model)
         else:
             mask = self.get_buffer("causal_mask")[..., :seq_length, :seq_length]
 
@@ -157,8 +159,9 @@ class CausalMultiHeadSelfAttention(nn.Module):
                 dropout=self.attention_dropout,
                 softcapping=self.softcapping,
             )
+            # returned shape is (batch_size, num_heads, seq_length, d_k), reshape back to (batch_size, seq_length, d_model)
+            y = y.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
 
-        y = y.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
         y = self.residual_dropout(self.rl_projection(y))
         return y
 
