@@ -434,7 +434,9 @@ def train_model(args: argparse.Namespace) -> None:
                 for log_idx in range(len(wandb_accum_logs)):
                     wandb_run.log(wandb_accum_logs[log_idx])
             wandb_accum_logs = []
-            dist.barrier()
+
+            if args.ddp_enabled:
+                dist.barrier()
 
         # save checkpoint
         if (global_step + 1) % args.save_interval == 0:
@@ -455,7 +457,9 @@ def train_model(args: argparse.Namespace) -> None:
                 )
                 model_save_path = os.path.join(checkpoints_dir, f"gpt2-{global_step + 1}.pt")
                 torch.save(checkpoint_dict, model_save_path)
-            dist.barrier()
+
+            if args.ddp_enabled:
+                dist.barrier()
 
         if (global_step + 1) % args.log_interval == 0 or global_step + 1 == args.train_steps:
             master_print(
@@ -490,7 +494,9 @@ def train_model(args: argparse.Namespace) -> None:
                 )
                 model_save_path = os.path.join(checkpoints_dir, f"gpt2-{global_step + 1}.pt")
                 torch.save(checkpoint_dict, model_save_path)
-            dist.barrier()
+
+            if args.ddp_enabled:
+                dist.barrier()
 
 
 def main():
