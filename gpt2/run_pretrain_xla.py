@@ -85,7 +85,9 @@ def train_model(args: argparse.Namespace):
     train_batch_size = args.train_batch_size // xr.world_size()
     eval_batch_size = args.eval_batch_size // xr.world_size()
     effective_batch_size = train_batch_size * xr.world_size() * args.gradient_accum_step
-    tokens_per_fwdbwd = train_batch_size * args.seq_length * args.gradient_accum_step
+    tokens_per_fwdbwd = (
+        train_batch_size * xr.world_size() * args.seq_length * args.gradient_accum_step
+    )
     master_print(
         f"Effective batch size: {effective_batch_size} "
         f"(micro_batch_size={train_batch_size}, "
