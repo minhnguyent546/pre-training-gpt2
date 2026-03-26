@@ -276,7 +276,12 @@ def train_model(args: argparse.Namespace) -> None:
 
     # wrap the model with DDP
     if args.ddp_enabled:
-        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
+        model = DDP(
+            model,
+            device_ids=[args.local_rank],
+            output_device=args.local_rank,
+            gradient_as_bucket_view=True,
+        )
 
     if args.do_test:
         valid_results = eval_model(
