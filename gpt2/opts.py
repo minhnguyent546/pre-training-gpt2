@@ -111,7 +111,7 @@ def _add_model_opts(parser: argparse.ArgumentParser) -> None:
         "--attn-logit-softcapping",
         type=float,
         help="Softcapping value for attention logits",
-        default=50.0,
+        default=0.0,  # use QK-Norm instead
     )
     group.add_argument(
         "--final-logit-softcapping",
