@@ -101,11 +101,11 @@ class CausalMultiHeadSelfAttention(nn.Module):
         if self.use_flash_attn and self.flash_attn_func is None:
             raise RuntimeError("USE_FLASH_ATTN=1 but flash-attn3 kernel is not available")
 
-        self.w_q = nn.Linear(d_model, d_model)
-        self.w_k = nn.Linear(d_model, d_model)
-        self.w_v = nn.Linear(d_model, d_model)
+        self.w_q = nn.Linear(d_model, d_model, bias=False)
+        self.w_k = nn.Linear(d_model, d_model, bias=False)
+        self.w_v = nn.Linear(d_model, d_model, bias=False)
 
-        self.rl_projection = nn.Linear(d_model, d_model)
+        self.rl_projection = nn.Linear(d_model, d_model, bias=False)
         if not self.use_flash_attn:
             self.register_buffer(
                 "causal_mask",
@@ -169,8 +169,8 @@ class CausalMultiHeadSelfAttention(nn.Module):
 class PositionWiseFeedForward(nn.Module):
     def __init__(self, d_model: int, d_ff: int, dropout: float):
         super().__init__()
-        self.linear = nn.Linear(d_model, d_ff)
-        self.rl_projection = nn.Linear(d_ff, d_model)
+        self.linear = nn.Linear(d_model, d_ff, bias=False)
+        self.rl_projection = nn.Linear(d_ff, d_model, bias=False)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: Tensor) -> Tensor:
