@@ -327,6 +327,7 @@ def train_model(args: argparse.Namespace) -> None:
     optimizer.zero_grad()
     train_loader_iter = iter(train_dataset)
     while global_step < args.train_steps:
+        last_step = global_step + 1 >= args.train_steps
         num_items_in_batch = torch.tensor(0, device=device)
         batch_fb_time = 0.0  # batch forward + backward time
         batch_loss = 0.0
@@ -409,7 +410,7 @@ def train_model(args: argparse.Namespace) -> None:
         running_loss.update(batch_loss, num_items_in_batch)  # pyright: ignore[reportArgumentType]
 
         # run validation
-        if (global_step + 1) % args.valid_interval == 0:
+        if (global_step + 1) % args.valid_interval == 0 or last_step:
             if args.ddp_enabled:
                 running_loss.reduce(dst=args.master_rank)
             valid_results = eval_model(
@@ -432,7 +433,7 @@ def train_model(args: argparse.Namespace) -> None:
 
         # log to wandb
         if len(wandb_accum_logs) >= args.wandb_logging_interval or (
-            len(wandb_accum_logs) > 0 and global_step + 1 >= args.train_steps
+            len(wandb_accum_logs) > 0 and last_step
         ):
             if args.ddp_enabled:
                 batch_loss_values = torch.tensor(
@@ -453,7 +454,7 @@ def train_model(args: argparse.Namespace) -> None:
                 dist.barrier()
 
         # save checkpoint
-        if (global_step + 1) % args.save_interval == 0:
+        if (global_step + 1) % args.save_interval == 0 or last_step:
             if args.is_master:
                 checkpoint_dict = {
                     "model": raw_model.state_dict(),
@@ -475,7 +476,7 @@ def train_model(args: argparse.Namespace) -> None:
             if args.ddp_enabled:
                 dist.barrier()
 
-        if (global_step + 1) % args.log_interval == 0 or global_step + 1 == args.train_steps:
+        if (global_step + 1) % args.log_interval == 0 or last_step:
             master_print(
                 f"[step {global_step + 1} / {args.train_steps}] loss: {batch_loss:0.4f} | throughput: {batch_throughput:0.1f} tokens/s | grad_norm: {grad_norm_value:0.4f} | token_seen: {token_seen:0.2e}",
                 console=False,
@@ -488,29 +489,6 @@ def train_model(args: argparse.Namespace) -> None:
         })
         global_step += 1
         train_iter.update()
-
-        # also save the model at the last step
-        if global_step == args.train_steps and args.train_steps % args.save_interval != 0:
-            if args.is_master:
-                checkpoint_dict = {
-                    "model": raw_model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "lr_scheduler": lr_scheduler.state_dict(),
-                    "config": vars(gpt_config),
-                    "global_step": global_step + 1,
-                }
-                if scaler.is_enabled():
-                    checkpoint_dict["scaler"] = scaler.state_dict()
-                utils.ensure_num_saved_checkpoints(
-                    checkpoints_dir=args.checkpoints_dir,
-                    model_basename="gpt2",
-                    limit=args.saved_checkpoint_limit,
-                )
-                model_save_path = os.path.join(checkpoints_dir, f"gpt2-{global_step + 1}.pt")
-                torch.save(checkpoint_dict, model_save_path)
-
-            if args.ddp_enabled:
-                dist.barrier()
 
 
 def main():

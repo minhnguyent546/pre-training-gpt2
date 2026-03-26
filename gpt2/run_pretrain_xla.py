@@ -349,6 +349,7 @@ def train_model(args: argparse.Namespace):
     optimizer.zero_grad()
     train_loader_iter = iter(train_device_loader)
     while global_step < args.train_steps:
+        last_step = global_step + 1 >= args.train_steps
         num_items_in_batch = torch.tensor(0, device=device)
         batch_loss = 0.0
 
@@ -423,7 +424,7 @@ def train_model(args: argparse.Namespace):
         running_loss.update(batch_loss, num_items_in_batch)  # pyright: ignore[reportArgumentType]
 
         # run validation
-        if (global_step + 1) % args.valid_interval == 0:
+        if (global_step + 1) % args.valid_interval == 0 or last_step:
             xm.rendezvous("all_reduce_running_loss")
             running_loss.all_reduce()
             valid_results = eval_model(
@@ -445,7 +446,7 @@ def train_model(args: argparse.Namespace):
 
         # log to wandb
         if len(wandb_accum_logs) >= args.wandb_logging_interval or (
-            len(wandb_accum_logs) > 0 and global_step + 1 >= args.train_steps
+            len(wandb_accum_logs) > 0 and last_step
         ):
             batch_loss_values = [loss["loss/batch_loss"] for loss in wandb_accum_logs]
             xm.rendezvous("all_reduce_batch_loss")
@@ -464,7 +465,7 @@ def train_model(args: argparse.Namespace):
             xm.rendezvous("exit_wandb_logging")
 
         # save checkpoint
-        if (global_step + 1) % args.save_interval == 0:
+        if (global_step + 1) % args.save_interval == 0 or last_step:
             if xm.is_master_ordinal(local=True):
                 checkpoint_dict = {
                     "model": raw_model.state_dict(),
@@ -497,27 +498,6 @@ def train_model(args: argparse.Namespace):
         })
         global_step += 1
         train_iter.update()
-
-        # also save the model at the last step
-        if global_step == args.train_steps and args.train_steps % args.save_interval != 0:
-            if xm.is_master_ordinal(local=True):
-                checkpoint_dict = {
-                    "model": raw_model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "lr_scheduler": lr_scheduler.state_dict(),
-                    "config": vars(gpt_config),
-                    "global_step": global_step + 1,
-                }
-                if scaler.is_enabled():
-                    checkpoint_dict["scaler"] = scaler.state_dict()
-                utils.ensure_num_saved_checkpoints(
-                    checkpoints_dir=args.checkpoints_dir,
-                    model_basename="gpt2",
-                    limit=args.saved_checkpoint_limit,
-                )
-                model_save_path = os.path.join(checkpoints_dir, f"gpt2-{global_step}.pt")
-                xm.save(checkpoint_dict, model_save_path, master_only=True, global_master=False)
-            xm.rendezvous("save_checkpoint")
 
 
 def _mp_fn(index: int, args: argparse.Namespace) -> None:
