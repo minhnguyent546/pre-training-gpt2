@@ -348,8 +348,8 @@ def train_model(args: argparse.Namespace) -> None:
                 assert labels.shape[0] == 1
                 labels = labels[0]
 
-            input_ids = input_ids.to(device)
-            labels = labels.to(device)
+            input_ids = input_ids.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
 
             # TODO: assume padding token id is -100, replace with actual padding token id if different
             num_items_in_batch += (labels != -100).sum()
@@ -574,8 +574,8 @@ def eval_model(
             assert labels.shape[0] == 1
             labels = labels[0]
 
-        input_ids = input_ids.to(device)
-        labels = labels.to(device)
+        input_ids = input_ids.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
         num_items_in_batch = (labels != -100).sum()
         with autocast_context:
             logits = model(input_ids)

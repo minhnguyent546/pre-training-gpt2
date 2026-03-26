@@ -66,11 +66,17 @@ class LMDataset(IterableDataset):  # pyright: ignore[reportMissingTypeArgument]
             )
             self._normalize_ptr()
 
-            input_ids = torch.from_numpy(input_ids.astype(np.int64)).view(
-                self.batch_size, self.seq_length
+            input_ids = (
+                torch
+                .from_numpy(input_ids.astype(np.int64))
+                .view(self.batch_size, self.seq_length)
+                .pin_memory()
             )
-            labels = torch.from_numpy(labels.astype(np.int64)).view(
-                self.batch_size, self.seq_length
+            labels = (
+                torch
+                .from_numpy(labels.astype(np.int64))
+                .view(self.batch_size, self.seq_length)
+                .pin_memory()
             )
             yield input_ids, labels
 
