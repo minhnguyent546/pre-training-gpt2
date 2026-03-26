@@ -376,6 +376,10 @@ def train_model(args: argparse.Namespace) -> None:
         token_seen += tokens_per_fwdbwd
 
         scaler.unscale_(optimizer)
+        for param in model.parameters():
+            if param.grad is not None:
+                param.grad.div_(num_items_in_batch)
+
         grad_norm_value = torch.nn.utils.clip_grad_norm_(
             model.parameters(),
             max_norm=(args.max_grad_norm if args.max_grad_norm > 0 else float("inf")),
