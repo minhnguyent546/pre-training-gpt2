@@ -101,10 +101,11 @@ def make_optimizer(
             raise ValueError("Muon optimizer requires specifying `muon_lr`")
         hidden_weights = [p for p in model.decoder_blocks.parameters() if p.ndim >= 2]
         hidden_gains_biases = [p for p in model.decoder_blocks.parameters() if p.ndim < 2]
-        nonhidden_params = [
+        embed_params = [
             *model.token_embedding.parameters(),
             *model.positional_embedding.parameters(),
         ]
+        nonhidden_params = []
         if not model.config.tie_weights:
             nonhidden_params.extend(model.lm_head.parameters())
         param_groups = [
@@ -112,8 +113,16 @@ def make_optimizer(
                 "params": hidden_weights,
                 "use_muon": True,
                 "lr": muon_lr,
-                "weight_decay": weight_decay,
+                "weight_decay": 0.0,  # disable wd for Muon
                 "momentum": 0.95,
+            },
+            {
+                "params": embed_params,
+                "use_muon": False,
+                "lr": lr * 10,  #  use 10x larger learning rate for embedding layers
+                "betas": betas,
+                "weight_decay": 0.0,
+                "eps": eps,
             },
             {
                 "params": nonhidden_params + hidden_gains_biases,
@@ -132,22 +141,29 @@ def make_optimizer(
                 "Install torch-xla or disable `use_syncfree_optim`."
             )
 
-        param_list = [param for param in model.parameters() if param.requires_grad]
-        decay_params = [param for param in param_list if param.dim() >= 2]
-        no_decay_params = [param for param in param_list if param.dim() < 2]
+        embed_names = {"token_embedding", "positional_embedding"}
+        embed_params = []
+        other_decay = []
+        no_decay_params = []
+        for name, p in model.named_parameters():
+            if any(name.startswith(n) for n in embed_names):
+                embed_params.append(p)
+            elif p.dim() >= 2:
+                other_decay.append(p)
+            else:
+                no_decay_params.append(p)
         param_groups = [
-            {"params": decay_params, "weight_decay": weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
+            {"params": embed_params, "lr": lr * 10, "weight_decay": 0.0},
+            {"params": other_decay, "lr": lr, "weight_decay": weight_decay},
+            {"params": no_decay_params, "lr": lr, "weight_decay": 0.0},
         ]
 
         if optim_type == "adam":
             adam_optim = xla_syncfree.Adam if use_syncfree_optim else torch.optim.Adam
-            optimizer = adam_optim(param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl)
+            optimizer = adam_optim(param_groups, betas=betas, eps=eps, fused=use_fused_impl)
         else:
             adamw_optim = xla_syncfree.AdamW if use_syncfree_optim else torch.optim.AdamW
-            optimizer = adamw_optim(
-                param_groups, lr=lr, betas=betas, eps=eps, fused=use_fused_impl
-            )
+            optimizer = adamw_optim(param_groups, betas=betas, eps=eps, fused=use_fused_impl)
     else:
         raise ValueError(
             f"Unsupported optimizer type: {optim_type}. Possible values are: adam, adamw"
