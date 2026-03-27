@@ -133,7 +133,10 @@ class RotaryPositionalEmbeddings(nn.Module):
         if seq_len > self.max_seq_len:
             self._set_cos_sin_cache(seq_len)
 
-        return self.cos_cache[:seq_len], self.sin_cache[:seq_len]
+        # (seq_len, dim/2) -> (1, seq_len, 1, dim/2) for broadcasting
+        cos = self.cos_cache[:seq_len, ...].view(1, -1, 1, self.dim // 2)  # pyright: ignore[reportIndexIssue]
+        sin = self.sin_cache[:seq_len, ...].view(1, -1, 1, self.dim // 2)  # pyright: ignore[reportIndexIssue]
+        return cos, sin
 
 
 class CausalMultiHeadSelfAttention(nn.Module):
