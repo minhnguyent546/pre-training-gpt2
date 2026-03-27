@@ -182,6 +182,21 @@ class PositionWiseFeedForward(nn.Module):
         return x
 
 
+class SwiGLUFeedForward(nn.Module):
+    def __init__(self, d_model: int, d_ff: int, dropout: float):
+        super().__init__()
+        self.w_gate = nn.Linear(d_model, d_ff, bias=False)
+        self.w_up = nn.Linear(d_model, d_ff, bias=False)
+        self.rl_projection = nn.Linear(d_ff, d_model, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = Fun.silu(self.w_gate(x)) * self.w_up(x)
+        x = self.dropout(x)
+        x = self.rl_projection(x)
+        return x
+
+
 @dataclass
 class GPTConfig:
     vocab_size: int = 50257
@@ -189,7 +204,7 @@ class GPTConfig:
     d_model: int = 768
     num_layers: int = 12
     num_heads: int = 12
-    d_ff: int = 3072
+    d_ff: int = 2048  # use 8/3 * d_model to achive the same number of parameters compare to FFN when switching to SwiGLU
     dropout: float = 0.0
     eps: float = 1e-7
     tie_weights: bool = True
@@ -207,7 +222,7 @@ class GPTDecoderBlock(nn.Module):
             config.seq_length,
             config.attn_logit_softcapping,
         )
-        self.position_wise_ffn = PositionWiseFeedForward(
+        self.mlp = SwiGLUFeedForward(
             config.d_model,
             config.d_ff,
             dropout=config.dropout,
@@ -216,7 +231,7 @@ class GPTDecoderBlock(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         """see: https://github.com/openai/gpt-2/blob/master/src/model.py#L123"""
         x = x + self.causal_self_attention(norm(x))
-        x = x + self.position_wise_ffn(norm(x))
+        x = x + self.mlp(norm(x))
         return x
 
 

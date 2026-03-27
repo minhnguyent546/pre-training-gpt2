@@ -94,7 +94,7 @@ def _add_model_opts(parser: argparse.ArgumentParser) -> None:
         "--d-ff",
         type=int,
         help="Intermediate size of the feed-forward layers",
-        default=3072,
+        default=2048,  # use 8/3 * d_model to achive the same number of parameters compare to FFN when switching to SwiGLU
     )
     group.add_argument(
         "--dropout",
@@ -268,19 +268,19 @@ def _add_common_training_opts(parser: argparse.ArgumentParser) -> None:
         "--train-batch-size",
         type=int,
         help="Training batch size",
-        default=32,
+        default=8,
     )
     group.add_argument(
         "--eval-batch-size",
         type=int,
         help="Evaluation batch size",
-        default=32,
+        default=16,
     )
     group.add_argument(
         "--gradient-accum-step",
         type=int,
         help="Gradient accumulation step",
-        default=1,
+        default=32,
     )
     group.add_argument(
         "--mixed-precision",
