@@ -103,7 +103,6 @@ def make_optimizer(
         hidden_gains_biases = [p for p in model.decoder_blocks.parameters() if p.ndim < 2]
         embed_params = [
             *model.token_embedding.parameters(),
-            *model.positional_embedding.parameters(),
         ]
         nonhidden_params = []
         if not model.config.tie_weights:
@@ -141,7 +140,7 @@ def make_optimizer(
                 "Install torch-xla or disable `use_syncfree_optim`."
             )
 
-        embed_names = {"token_embedding", "positional_embedding"}
+        embed_names = {"token_embedding"}
         embed_params = []
         other_decay = []
         no_decay_params = []
