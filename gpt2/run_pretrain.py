@@ -326,6 +326,7 @@ def train_model(args: argparse.Namespace) -> None:
     model.train()
     optimizer.zero_grad()
     train_loader_iter = iter(train_dataset)
+    training_start_time = time.perf_counter()
     while global_step < args.train_steps:
         last_step = global_step + 1 >= args.train_steps
         num_items_in_batch = torch.tensor(0, device=device)
@@ -489,6 +490,15 @@ def train_model(args: argparse.Namespace) -> None:
         })
         global_step += 1
         train_iter.update()
+
+    training_time = time.perf_counter() - training_start_time
+    peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024 if device.type == "cuda" else 0
+    master_print(
+        f"*** Training stats: ***\n"
+        f"  - Training time {utils.to_hms(training_time)}\n"
+        f"  - Num tokens seen: {token_seen:0.2e}\n"
+        f"  - Peak VRAM usage: {peak_vram_mb:.2f} MB\n"
+    )
 
 
 def main():

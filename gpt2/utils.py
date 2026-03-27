@@ -351,3 +351,10 @@ def get_wsd_schedule(
         return min_lr_ratio
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+def to_hms(seconds: float) -> str:
+    """Convert seconds to hours, minutes, seconds format."""
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{int(hours)}h {int(minutes)}m {secs:.2f}s"

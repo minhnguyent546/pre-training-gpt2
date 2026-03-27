@@ -4,6 +4,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from contextlib import nullcontext
 from datetime import datetime
 from typing import Any
@@ -348,6 +349,7 @@ def train_model(args: argparse.Namespace):
     model.train()
     optimizer.zero_grad()
     train_loader_iter = iter(train_device_loader)
+    training_start_time = time.perf_counter()
     while global_step < args.train_steps:
         last_step = global_step + 1 >= args.train_steps
         num_items_in_batch = torch.tensor(0, device=device)
@@ -498,6 +500,13 @@ def train_model(args: argparse.Namespace):
         })
         global_step += 1
         train_iter.update()
+
+    training_time = time.perf_counter() - training_start_time
+    master_print(
+        f"*** Training stats: ***\n"
+        f"  - Training time {utils.to_hms(training_time)}\n"
+        f"  - Num tokens seen: {token_seen:0.2e}\n"
+    )
 
 
 def _mp_fn(index: int, args: argparse.Namespace) -> None:
