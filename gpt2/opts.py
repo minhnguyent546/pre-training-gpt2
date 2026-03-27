@@ -108,6 +108,12 @@ def _add_model_opts(parser: argparse.ArgumentParser) -> None:
         help="Whether to tie weights between input and output embeddings",
     )
     group.add_argument(
+        "--rope-theta",
+        type=float,
+        help="Theta value for RoPE",
+        default=10000.0,
+    )
+    group.add_argument(
         "--attn-logit-softcapping",
         type=float,
         help="Softcapping value for attention logits",

@@ -50,8 +50,8 @@ def scaled_dot_product_attention(
     dropout: float | nn.Dropout | None = None,
     softcapping: float | None = None,
 ) -> Tensor:
-    d_k = query.size(-1)
-    attention_probs = (query @ key.transpose(-2, -1)) / math.sqrt(d_k)
+    head_dim = query.size(-1)
+    attention_probs = (query @ key.transpose(-2, -1)) / math.sqrt(head_dim)
     if softcapping is not None and softcapping > 0.0:
         attention_probs = attention_probs.float()
         attention_probs = softcap(attention_probs, softcapping)
@@ -77,6 +77,69 @@ def get_device(device: torch.device | str = "auto") -> torch.device:
     return torch.device(device)
 
 
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    """
+    Applies rotary positional embeddings to the input tensor.
+
+    Args:
+        x (torch.Tensor): Input tensor of shape (batch, seq_length, num_heads, head_dim).
+        freqs_cis (torch.Tensor): Precomputed complex exponential values of shape (seq_length, head_dim/2).
+
+    Returns:
+        torch.Tensor: Tensor with rotary embeddings applied, shape (batch, seq_length, num_heads, head_dim).
+    """
+    dtype = x.dtype
+    # x: (batch, seq_length, num_heads, head_dim) -> (batch, seq_length, num_heads, head_dim/2) as complex numbers
+    x = torch.view_as_complex(x.float().view(*x.shape[:-1], -1, 2))
+    # freqs_cis: (seq_length, head_dim/2) -> (1, seq_length, 1, head_dim/2) as complex numbers for broadcasting
+    freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
+    # y: (batch, seq_length, num_heads, head_dim/2) as complex numbers -> (batch, seq_length, num_heads, head_dim) as real numbers
+    y = torch.view_as_real(x * freqs_cis).flatten(3)
+    return y.to(dtype)
+
+
+class RotaryPositionalEmbeddings(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        base_theta: float = 10000.0,
+        max_seq_len: int = 2048,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.base = base_theta
+        self.max_seq_len = max_seq_len
+
+        # Precompute frequencies
+        # This matches the "1/10000^(2i/d)" formula
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, dim, 2).float() / dim))
+
+        # Register buffer so it saves with state_dict but isn't a parameter
+        self.register_buffer("inv_freq", inv_freq)
+
+        # Cache for the cosine and sine values
+        self._set_cos_sin_cache(max_seq_len)
+
+    def _set_cos_sin_cache(self, seq_len):
+        self.max_seq_len = seq_len
+        t = torch.arange(self.max_seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+
+        # Outer product to generate frequencies for all positions
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+
+        # Create Complex numbers: e^{i * freq} = cos(freq) + i * sin(freq)
+        # Shape: [seq_len, dim/2]
+        emb = torch.polar(torch.ones_like(freqs), freqs)
+
+        self.register_buffer("cos_sin_cache", emb, persistent=False)
+
+    def forward(self, seq_len: int):
+        if seq_len > self.max_seq_len:
+            self._set_cos_sin_cache(seq_len)
+
+        return self.cos_sin_cache[:seq_len, ...]
+
+
 class CausalMultiHeadSelfAttention(nn.Module):
     def __init__(
         self,
@@ -84,6 +147,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
         num_heads: int,
         dropout: float,
         max_seq_length: int,
+        rope_theta: float = 10000.0,
         softcapping: float | None = None,
     ):
         super().__init__()
@@ -91,7 +155,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
             raise ValueError("d_model must be divisible by num_heads")
         self.d_model = d_model
         self.num_heads = num_heads
-        self.d_k = self.d_model // self.num_heads
+        self.head_dim = self.d_model // self.num_heads
         self.attention_dropout = nn.Dropout(dropout)
         self.residual_dropout = nn.Dropout(dropout)
         self.use_flash_attn = USE_FLASH_ATTN
@@ -106,6 +170,11 @@ class CausalMultiHeadSelfAttention(nn.Module):
         self.w_v = nn.Linear(d_model, d_model, bias=False)
 
         self.rl_projection = nn.Linear(d_model, d_model, bias=False)
+
+        self.rope = RotaryPositionalEmbeddings(
+            self.head_dim, base_theta=rope_theta, max_seq_len=max_seq_length
+        )
+
         if not self.use_flash_attn:
             self.register_buffer(
                 "causal_mask",
@@ -121,15 +190,21 @@ class CausalMultiHeadSelfAttention(nn.Module):
         k = self.w_k(x)
         v = self.w_v(x)
 
+        # Reshape to (batch_size, seq_length, num_heads, head_dim)
+        q = q.view(batch_size, seq_length, self.num_heads, self.head_dim)
+        k = k.view(batch_size, seq_length, self.num_heads, self.head_dim)
+        v = v.view(batch_size, seq_length, self.num_heads, self.head_dim)
+
+        # QK-Norm
+        q = norm(q)
+        k = norm(k)
+
+        # Follow Qwen3/Gemma3 stype: applying norm and then RoPE
+        freqs_cis = self.rope(seq_length)
+        q = apply_rotary_emb(q, freqs_cis)
+        k = apply_rotary_emb(k, freqs_cis)
+
         if self.use_flash_attn and self.flash_attn_func is not None:
-            # Reshape for FA3: (batch_size, seq_length, num_heads, d_k)
-            q = q.view(batch_size, seq_length, self.num_heads, self.d_k)
-            k = k.view(batch_size, seq_length, self.num_heads, self.d_k)
-            v = v.view(batch_size, seq_length, self.num_heads, self.d_k)
-
-            q = norm(q)
-            k = norm(k)
-
             # FA3 does not support dropout (https://github.com/Dao-AILab/flash-attention/issues/1377#issuecomment-2529622590)
             y = self.flash_attn_func(
                 q,
@@ -138,28 +213,20 @@ class CausalMultiHeadSelfAttention(nn.Module):
                 causal=True,
                 softcap=self.softcapping,
             )
-            # returned shape is (batch_size, seq_length, num_heads, d_k), reshape back to (batch_size, seq_length, d_model)
+            # returned shape is (batch_size, seq_length, num_heads, head_dim), reshape back to (batch_size, seq_length, d_model)
             y = y.reshape(batch_size, -1, self.d_model)
         else:
             mask = self.get_buffer("causal_mask")[..., :seq_length, :seq_length]
 
-            # q, k, v: (batch_size, seq_length, d_model) -> (batch_size, num_heads, seq_length, d_k)
-            q = q.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-            k = k.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-            v = v.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-
-            q = norm(q)
-            k = norm(k)
-
             y = scaled_dot_product_attention(
-                q,
-                k,
-                v,
+                q.transpose(1, 2),
+                k.transpose(1, 2),
+                v.transpose(1, 2),
                 mask=mask,
                 dropout=self.attention_dropout,
                 softcapping=self.softcapping,
             )
-            # returned shape is (batch_size, num_heads, seq_length, d_k), reshape back to (batch_size, seq_length, d_model)
+            # returned shape is (batch_size, num_heads, seq_length, head_dim), reshape back to (batch_size, seq_length, d_model)
             y = y.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
 
         y = self.residual_dropout(self.rl_projection(y))
@@ -208,6 +275,7 @@ class GPTConfig:
     dropout: float = 0.0
     eps: float = 1e-7
     tie_weights: bool = True
+    rope_theta: float = 10000.0
     attn_logit_softcapping: float | None = None
     final_logit_softcapping: float | None = None
 
@@ -220,7 +288,8 @@ class GPTDecoderBlock(nn.Module):
             config.num_heads,
             config.dropout,
             config.seq_length,
-            config.attn_logit_softcapping,
+            rope_theta=config.rope_theta,
+            softcapping=config.attn_logit_softcapping,
         )
         self.mlp = SwiGLUFeedForward(
             config.d_model,
