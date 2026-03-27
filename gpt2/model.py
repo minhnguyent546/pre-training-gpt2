@@ -77,25 +77,24 @@ def get_device(device: torch.device | str = "auto") -> torch.device:
     return torch.device(device)
 
 
-def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     """
     Applies rotary positional embeddings to the input tensor.
 
     Args:
         x (torch.Tensor): Input tensor of shape (batch, seq_length, num_heads, head_dim).
-        freqs_cis (torch.Tensor): Precomputed complex exponential values of shape (seq_length, head_dim/2).
+        cos (torch.Tensor): Precomputed cosine values of shape (seq_length, head_dim/2).
+        sin (torch.Tensor): Precomputed sine values of shape (seq_length, head_dim/2).
 
     Returns:
         torch.Tensor: Tensor with rotary embeddings applied, shape (batch, seq_length, num_heads, head_dim).
     """
-    dtype = x.dtype
-    # x: (batch, seq_length, num_heads, head_dim) -> (batch, seq_length, num_heads, head_dim/2) as complex numbers
-    x = torch.view_as_complex(x.float().view(*x.shape[:-1], -1, 2))
-    # freqs_cis: (seq_length, head_dim/2) -> (1, seq_length, 1, head_dim/2) as complex numbers for broadcasting
-    freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    # y: (batch, seq_length, num_heads, head_dim/2) as complex numbers -> (batch, seq_length, num_heads, head_dim) as real numbers
-    y = torch.view_as_real(x * freqs_cis).flatten(3)
-    return y.to(dtype)
+    assert x.ndim == 4
+    d = x.size(-1) // 2
+    x1, x2 = x[..., :d], x[..., d:]
+    y1 = x1 * cos - x2 * sin
+    y2 = x2 * cos + x1 * sin
+    return torch.cat([y1, y2], dim=-1).type_as(x)
 
 
 class RotaryPositionalEmbeddings(nn.Module):
@@ -127,17 +126,14 @@ class RotaryPositionalEmbeddings(nn.Module):
         # Outer product to generate frequencies for all positions
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
 
-        # Create Complex numbers: e^{i * freq} = cos(freq) + i * sin(freq)
-        # Shape: [seq_len, dim/2]
-        emb = torch.polar(torch.ones_like(freqs), freqs)
-
-        self.register_buffer("cos_sin_cache", emb, persistent=False)
+        self.register_buffer("cos_cache", freqs.cos(), persistent=False)
+        self.register_buffer("sin_cache", freqs.sin(), persistent=False)
 
     def forward(self, seq_len: int):
         if seq_len > self.max_seq_len:
             self._set_cos_sin_cache(seq_len)
 
-        return self.cos_sin_cache[:seq_len, ...]
+        return self.cos_cache[:seq_len], self.sin_cache[:seq_len]
 
 
 class CausalMultiHeadSelfAttention(nn.Module):
@@ -200,9 +196,9 @@ class CausalMultiHeadSelfAttention(nn.Module):
         k = norm(k)
 
         # Follow Qwen3/Gemma3 stype: applying norm and then RoPE
-        freqs_cis = self.rope(seq_length)
-        q = apply_rotary_emb(q, freqs_cis)
-        k = apply_rotary_emb(k, freqs_cis)
+        cos, sin = self.rope(seq_length)
+        q = apply_rotary_emb(q, cos=cos, sin=sin)
+        k = apply_rotary_emb(k, cos=cos, sin=sin)
 
         if self.use_flash_attn and self.flash_attn_func is not None:
             # FA3 does not support dropout (https://github.com/Dao-AILab/flash-attention/issues/1377#issuecomment-2529622590)
