@@ -309,8 +309,6 @@ class GPT(nn.Module):
         super().__init__()
         self.config = config
         self.token_embedding = nn.Embedding(self.config.vocab_size, self.config.d_model)
-        self.positional_embedding = nn.Embedding(self.config.seq_length, self.config.d_model)
-        self.pe_dropout = nn.Dropout(self.config.dropout)
         self.decoder_blocks = nn.Sequential(*[
             GPTDecoderBlock(self.config) for _ in range(self.config.num_layers)
         ])
@@ -319,13 +317,8 @@ class GPT(nn.Module):
         self.post_init()
 
     def forward(self, ids: Tensor) -> Tensor:
-        _, seq_length = ids.size()
         token_embeddings = self.token_embedding(ids)
-        pos = torch.arange(0, seq_length, dtype=torch.int64, device=ids.device)
-        pos_embeddings = self.positional_embedding(pos)
-        # x = self.pe_dropout(token_embeddings + pos_embeddings)
-        x = token_embeddings + pos_embeddings
-        x = self.decoder_blocks(x)
+        x = self.decoder_blocks(token_embeddings)
         x = norm(x)
         logits = self.lm_head(x)  # (batch_size, seq_length, vocab_size)
         if (
